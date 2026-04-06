@@ -144,6 +144,9 @@ class SendDashboardReportRequest(BaseModel):
     to_email: str
     dashboard_id: int
 
+class PromoteTestUserRequest(BaseModel):
+    email: str
+
 class User(Base):
     __tablename__ = "users"
 
@@ -835,6 +838,32 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.post("/admin/promote-test-user")
+async def promote_test_user(
+    data: PromoteTestUserRequest,
+    db: Session = Depends(get_db),
+):
+    email = (data.email or "").strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user.subscription_status = "active"
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "success",
+        "email": user.email,
+        "subscription_status": user.subscription_status,
+    }
 
 @app.post("/test-email")
 async def send_test_email(data: TestEmailRequest):
@@ -1701,6 +1730,14 @@ async def rename_saved_view(
             "report_enabled": bool(saved_view.report_enabled),
             "report_frequency": saved_view.report_frequency or "weekly",
             "report_recipient": saved_view.report_recipient,
+            "last_report_sent_at": saved_view.last_report_sent_at.isoformat() if saved_view.last_report_sent_at else None,
+            "last_report_started_at": saved_view.last_report_started_at.isoformat() if saved_view.last_report_started_at else None,
+            "last_report_error": saved_view.last_report_error,
+            "next_report_due_at": (
+                get_next_report_due_at(saved_view).isoformat()
+                if get_next_report_due_at(saved_view)
+                else None
+            ),
             "created_at": saved_view.created_at.isoformat() if saved_view.created_at else None,
         },
     }
