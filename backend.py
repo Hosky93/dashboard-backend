@@ -21,11 +21,8 @@ import textwrap
 import math
 import json
 import logging
-import smtplib
-import time
+import requests
 
-
-from email.message import EmailMessage
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -103,13 +100,9 @@ STRIPE_SUCCESS_PATH = os.getenv("STRIPE_SUCCESS_PATH", "/billing/success").strip
 STRIPE_CANCEL_PATH = os.getenv("STRIPE_CANCEL_PATH", "/billing/cancel").strip()
 REPORTS_CRON_SECRET = os.getenv("REPORTS_CRON_SECRET", "").strip()
 
-EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "").strip()
-EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
-EMAIL_SMTP_USERNAME = os.getenv("EMAIL_SMTP_USERNAME", "").strip()
-EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "").strip()
-EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS", "").strip()
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Small Business Insights")
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").strip().lower() in {"true", "1", "yes", "on"}
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS", "onboarding@resend.dev").strip()
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Small Business Insights").strip()
 EMAIL_SEND_TIMEOUT_SECONDS = int(os.getenv("EMAIL_SEND_TIMEOUT_SECONDS", "20"))
 
 stripe.api_key = STRIPE_SECRET_KEY or None
@@ -264,15 +257,7 @@ run_sqlite_safe_migrations()
 # =============================================================
 
 def is_email_configured() -> bool:
-    return all(
-        [
-            EMAIL_SMTP_HOST,
-            EMAIL_SMTP_PORT,
-            EMAIL_SMTP_USERNAME,
-            EMAIL_SMTP_PASSWORD,
-            EMAIL_FROM_ADDRESS,
-        ]
-    )
+    return bool(RESEND_API_KEY and EMAIL_FROM_ADDRESS)
 
 
 def build_from_header() -> str:
@@ -289,11 +274,7 @@ def send_email_message(
     body_html: Optional[str] = None,
 ) -> None:
     """
-    Send a plain text email using SMTP.
-
-    Raises:
-        HTTPException: for expected configuration / validation problems
-        Exception: for unexpected SMTP failures
+    Send an email using the Resend API.
     """
     to_email = (to_email or "").strip()
     subject = (subject or "").strip()
@@ -309,62 +290,62 @@ def send_email_message(
         raise HTTPException(status_code=400, detail="Email body is required.")
 
     if not is_email_configured():
-        logger.error("Email sending attempted but SMTP environment variables are incomplete.")
+        logger.error("Email sending attempted but Resend environment variables are incomplete.")
         raise HTTPException(
             status_code=500,
             detail="Email is not configured on the server.",
         )
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = build_from_header()
-    message["To"] = to_email
-    message.set_content(body_text)
+    payload = {
+        "from": build_from_header(),
+        "to": [to_email],
+        "subject": subject,
+        "text": body_text,
+    }
 
     if body_html:
-        message.add_alternative(body_html, subtype="html")
+        payload["html"] = body_html
 
-    last_exception = None
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=EMAIL_SEND_TIMEOUT_SECONDS,
+        )
 
-    for attempt in range(1, 4):
-        try:
-            with smtplib.SMTP(
-                EMAIL_SMTP_HOST,
-                EMAIL_SMTP_PORT,
-                timeout=EMAIL_SEND_TIMEOUT_SECONDS,
-            ) as smtp:
-                if EMAIL_USE_TLS:
-                    smtp.starttls()
-
-                smtp.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
-                smtp.send_message(message)
-
-            logger.info(
-                "Email sent successfully to=%s subject=%s attempt=%s",
-                to_email,
-                subject,
-                attempt,
+        if response.status_code >= 400:
+            logger.error(
+                "Resend API error status=%s body=%s",
+                response.status_code,
+                response.text,
             )
-            return
-
-        except HTTPException:
-            raise
-        except Exception as exc:
-            last_exception = exc
-            logger.exception(
-                "Failed to send email to=%s subject=%s attempt=%s",
-                to_email,
-                subject,
-                attempt,
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send email: {response.text}",
             )
 
-            if attempt < 3:
-                time.sleep(2)
+        logger.info(
+            "Email sent successfully via Resend to=%s subject=%s",
+            to_email,
+            subject,
+        )
 
-    raise HTTPException(
-        status_code=500,
-        detail=f"Failed to send email: {last_exception}",
-    )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Failed to send email via Resend to=%s subject=%s",
+            to_email,
+            subject,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email: {exc}",
+        )
     
 def html_escape(value: Any) -> str:
     if value is None:
