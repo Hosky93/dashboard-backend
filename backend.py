@@ -207,10 +207,13 @@ Base.metadata.create_all(bind=engine)
 
 def run_sqlite_safe_migrations() -> None:
     """
-    Tiny migration helper for local SQLite development.
+    Tiny migration helper for local SQLite development only.
     Adds missing SavedView scheduling columns if they do not exist yet.
     Also normalises old report_enabled values into 0/1 form for SQLite.
     """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
     try:
         with engine.connect() as conn:
             result = conn.exec_driver_sql("PRAGMA table_info(saved_views)")
