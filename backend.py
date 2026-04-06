@@ -1344,39 +1344,6 @@ async def reanalyze_saved_dashboard(
         comparison_preset = ""
         comparison_style = "manual"
 
-    filter_options = {
-        "products": [],
-        "customers": [],
-        "min_date": "",
-        "max_date": "",
-    }
-
-    if product_col and product_col in df_clean.columns:
-        filter_options["products"] = sorted(
-            [
-                str(v)
-                for v in df_clean[product_col]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-                if str(v).strip()
-            ]
-        )
-
-    if customer_col and customer_col in df_clean.columns:
-        filter_options["customers"] = sorted(
-            [
-                str(v)
-                for v in df_clean[customer_col]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-                if str(v).strip()
-            ]
-        )
-
     parsed_dates = pd.Series(dtype="datetime64[ns]")
     chosen_date_parse_mode = saved_date_parse_mode or "month_first"
 
@@ -1385,10 +1352,17 @@ async def reanalyze_saved_dashboard(
             df_clean[date_col],
             forced_mode=saved_date_parse_mode,
         )
-        valid_dates = parsed_dates.dropna()
-        if not valid_dates.empty:
-            filter_options["min_date"] = valid_dates.min().date().isoformat()
-            filter_options["max_date"] = valid_dates.max().date().isoformat()
+
+    filter_options = build_dependent_filter_options(
+        df_clean,
+        date_col=date_col,
+        product_col=product_col,
+        customer_col=customer_col,
+        filter_start_date=filter_start_date,
+        filter_end_date=filter_end_date,
+        selected_products=parsed_filter_product,
+        selected_customers=parsed_filter_customer,
+    )
 
     effective_time_grouping = time_grouping
 
@@ -1907,6 +1881,131 @@ def apply_dimension_filters(
     return filtered
 
 
+def build_dependent_filter_options(
+    df: pd.DataFrame,
+    *,
+    date_col: Optional[str] = None,
+    product_col: Optional[str] = None,
+    customer_col: Optional[str] = None,
+    filter_start_date: Optional[str] = None,
+    filter_end_date: Optional[str] = None,
+    selected_products: Optional[List[str]] = None,
+    selected_customers: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Build dropdown options that only show valid combinations.
+
+    Rules:
+    - Product options are narrowed by current date filters + selected customers
+    - Customer options are narrowed by current date filters + selected products
+    """
+    working_df = df.copy()
+
+    if date_col and date_col in working_df.columns:
+        parsed_dates, _ = parse_dates_three_tier(working_df[date_col])
+        working_df[date_col] = parsed_dates
+        working_df = working_df.dropna(subset=[date_col])
+
+        if filter_start_date:
+            try:
+                start_dt = pd.Timestamp(filter_start_date).normalize()
+                working_df = working_df[working_df[date_col] >= start_dt]
+            except Exception:
+                pass
+
+        if filter_end_date:
+            try:
+                end_dt = pd.Timestamp(filter_end_date).normalize()
+                working_df = working_df[working_df[date_col] <= end_dt]
+            except Exception:
+                pass
+
+    products: List[str] = []
+    customers: List[str] = []
+
+    product_df = working_df.copy()
+    if selected_customers and customer_col and customer_col in product_df.columns:
+        product_df = product_df[
+            product_df[customer_col].astype(str).isin([str(v) for v in selected_customers])
+        ]
+
+    if product_col and product_col in product_df.columns:
+        products = sorted(
+            [
+                str(v)
+                for v in product_df[product_col].dropna().astype(str).unique().tolist()
+                if str(v).strip()
+            ]
+        )
+
+    customer_df = working_df.copy()
+    if selected_products and product_col and product_col in customer_df.columns:
+        customer_df = customer_df[
+            customer_df[product_col].astype(str).isin([str(v) for v in selected_products])
+        ]
+
+    if customer_col and customer_col in customer_df.columns:
+        customers = sorted(
+            [
+                str(v)
+                for v in customer_df[customer_col].dropna().astype(str).unique().tolist()
+                if str(v).strip()
+            ]
+        )
+
+    min_date = ""
+    max_date = ""
+
+    if date_col and date_col in working_df.columns:
+        valid_dates = working_df[date_col].dropna()
+        if not valid_dates.empty:
+            min_date = valid_dates.min().date().isoformat()
+            max_date = valid_dates.max().date().isoformat()
+
+    return {
+        "products": products,
+        "customers": customers,
+        "min_date": min_date,
+        "max_date": max_date,
+    }
+
+    """
+    Apply all non-date filters first, using the REAL mapped column names.
+    Supports either a single selected value or a list of selected values.
+    """
+    filtered = df.copy()
+
+    if product is not None and product_col and product_col in filtered.columns:
+        if isinstance(product, list):
+            product_values = [str(v).strip() for v in product if str(v).strip()]
+            if product_values:
+                filtered = filtered[
+                    filtered[product_col].astype(str).str.strip().isin(product_values)
+                ]
+        else:
+            product_value = str(product).strip()
+            if product_value:
+                filtered = filtered[
+                    filtered[product_col].astype(str).str.strip() == product_value
+                ]
+
+    if customer is not None and customer_col and customer_col in filtered.columns:
+        if isinstance(customer, list):
+            customer_values = [str(v).strip() for v in customer if str(v).strip()]
+            if customer_values:
+                filtered = filtered[
+                    filtered[customer_col].astype(str).str.strip().isin(customer_values)
+                ]
+        else:
+            customer_value = str(customer).strip()
+            if customer_value:
+                filtered = filtered[
+                    filtered[customer_col].astype(str).str.strip() == customer_value
+                ]
+
+    return filtered
+
+
 def get_comparison_date_range(start_date, end_date, comparison_mode):
     """
     Returns:
@@ -2118,13 +2217,6 @@ async def analyze_with_mapping(
     if time_grouping not in ["day", "week", "month", "year"]:
         time_grouping = "month"
 
-    filter_options = {
-        "products": [],
-        "customers": [],
-        "min_date": "",
-        "max_date": "",
-    }
-
     comparison_is_enabled = parse_bool_form_value(comparison_enabled)
     comparison_style = (comparison_style or "manual").strip().lower()
     comparison_preset = (comparison_preset or "").strip().lower()
@@ -2138,32 +2230,6 @@ async def analyze_with_mapping(
         comparison_preset = ""
         comparison_style = "manual"
 
-    if product_col and product_col in df_clean.columns:
-        filter_options["products"] = sorted(
-            [
-                str(v)
-                for v in df_clean[product_col]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-                if str(v).strip()
-            ]
-        )
-
-    if customer_col and customer_col in df_clean.columns:
-        filter_options["customers"] = sorted(
-            [
-                str(v)
-                for v in df_clean[customer_col]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-                if str(v).strip()
-            ]
-        )
-
     parsed_dates = pd.Series(dtype="datetime64[ns]")
     chosen_date_parse_mode = stored_date_parse_mode or "month_first"
 
@@ -2172,10 +2238,6 @@ async def analyze_with_mapping(
             df_clean[date_col],
             forced_mode=stored_date_parse_mode,
         )
-        valid_dates = parsed_dates.dropna()
-        if not valid_dates.empty:
-            filter_options["min_date"] = valid_dates.min().date().isoformat()
-            filter_options["max_date"] = valid_dates.max().date().isoformat()
 
     parsed_filter_product = (
         [v.strip() for v in filter_product.split("|") if v.strip()]
@@ -2187,6 +2249,17 @@ async def analyze_with_mapping(
         [v.strip() for v in filter_customer.split("|") if v.strip()]
         if filter_customer
         else []
+    )
+
+    filter_options = build_dependent_filter_options(
+        df_clean,
+        date_col=date_col,
+        product_col=product_col,
+        customer_col=customer_col,
+        filter_start_date=filter_start_date,
+        filter_end_date=filter_end_date,
+        selected_products=parsed_filter_product,
+        selected_customers=parsed_filter_customer,
     )
 
     effective_filter_start_date = (filter_start_date or "").strip()
