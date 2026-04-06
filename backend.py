@@ -3682,22 +3682,32 @@ def create_checkout_session(
             detail="Stripe billing is not configured on the server.",
         )
 
+    if user_has_active_subscription(current_user):
+        raise HTTPException(
+            status_code=400,
+            detail="Your account is already on a paid plan.",
+        )
+
     if not current_user.stripe_customer_id:
         customer = stripe.Customer.create(email=current_user.email)
         current_user.stripe_customer_id = customer["id"]
         db.add(current_user)
         db.commit()
+        db.refresh(current_user)
 
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        payment_method_types=["card"],
-        customer=current_user.stripe_customer_id,
-        line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-        success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}",
-        cancel_url=f"{FRONTEND_BASE_URL}{STRIPE_CANCEL_PATH}",
-    )
-    return {"checkout_url": session.url}
-
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            payment_method_types=["card"],
+            customer=current_user.stripe_customer_id,
+            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
+            success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}",
+            cancel_url=f"{FRONTEND_BASE_URL}{STRIPE_CANCEL_PATH}",
+        )
+        return {"checkout_url": session.url}
+    except Exception as exc:
+        logger.exception("Failed to create Stripe checkout session for user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail=f"Failed to start checkout: {exc}")
 
 @app.post("/billing/webhook")
 async def stripe_webhook(
@@ -3739,7 +3749,31 @@ async def stripe_webhook(
     logger.info("Stripe webhook received event type=%s", event_type)
 
     try:
-        if event_type == "customer.subscription.updated":
+        if event_type == "checkout.session.completed":
+            data_object = (event.get("data") or {}).get("object") or {}
+            customer_id = data_object.get("customer")
+
+            if not customer_id:
+                logger.warning("Stripe webhook checkout.session.completed missing customer id.")
+                return {"received": True}
+
+            user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+            if not user:
+                logger.warning(
+                    "Stripe webhook checkout.session.completed: no user found for customer %s",
+                    customer_id,
+                )
+                return {"received": True}
+
+            user.subscription_status = "active"
+            db.add(user)
+            db.commit()
+            logger.info(
+                "Marked user %s subscription as 'active' from checkout.session.completed.",
+                user.id,
+            )
+
+        elif event_type == "customer.subscription.updated":
             data_object = (event.get("data") or {}).get("object") or {}
             customer_id = data_object.get("customer")
             status_stripe = data_object.get("status")
@@ -3756,16 +3790,15 @@ async def stripe_webhook(
                 )
                 return {"received": True}
 
-            # Map Stripe status into our subscription_status field
             if status_stripe == "active":
                 user.subscription_status = "active"
             elif status_stripe in {
+                "trialing",
                 "past_due",
                 "unpaid",
                 "canceled",
                 "incomplete",
                 "incomplete_expired",
-                "trialing",
             }:
                 user.subscription_status = status_stripe
 
@@ -3780,19 +3813,28 @@ async def stripe_webhook(
         elif event_type == "customer.subscription.deleted":
             data_object = (event.get("data") or {}).get("object") or {}
             customer_id = data_object.get("customer")
-            if customer_id:
-                user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
-                if user:
-                    user.subscription_status = "canceled"
-                    db.add(user)
-                    db.commit()
-                    logger.info(
-                        "Marked user %s subscription as 'canceled' from webhook.",
-                        user.id,
-                    )
+
+            if not customer_id:
+                logger.warning("Stripe webhook subscription.deleted missing customer id.")
+                return {"received": True}
+
+            user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+            if not user:
+                logger.warning(
+                    "Stripe webhook subscription.deleted: no user found for customer %s",
+                    customer_id,
+                )
+                return {"received": True}
+
+            user.subscription_status = "canceled"
+            db.add(user)
+            db.commit()
+            logger.info(
+                "Marked user %s subscription as 'canceled' from webhook.",
+                user.id,
+            )
 
         else:
-            # Unsupported or unimportant event; just log and ack
             logger.info("Stripe webhook: ignoring unsupported event type '%s'.", event_type)
     except Exception:
         # Never let webhook processing crash the app; log and acknowledge.
