@@ -22,6 +22,7 @@ import math
 import json
 import logging
 import smtplib
+import time
 
 
 from email.message import EmailMessage
@@ -323,36 +324,47 @@ def send_email_message(
     if body_html:
         message.add_alternative(body_html, subtype="html")
 
-    try:
-        with smtplib.SMTP(
-            EMAIL_SMTP_HOST,
-            EMAIL_SMTP_PORT,
-            timeout=EMAIL_SEND_TIMEOUT_SECONDS,
-        ) as smtp:
-            if EMAIL_USE_TLS:
-                smtp.starttls()
+    last_exception = None
 
-            smtp.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
-            smtp.send_message(message)
+    for attempt in range(1, 4):
+        try:
+            with smtplib.SMTP(
+                EMAIL_SMTP_HOST,
+                EMAIL_SMTP_PORT,
+                timeout=EMAIL_SEND_TIMEOUT_SECONDS,
+            ) as smtp:
+                if EMAIL_USE_TLS:
+                    smtp.starttls()
 
-        logger.info(
-            "Email sent successfully to=%s subject=%s",
-            to_email,
-            subject,
-        )
+                smtp.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
+                smtp.send_message(message)
 
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(
-            "Failed to send email to=%s subject=%s",
-            to_email,
-            subject,
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to send email.",
-        )
+            logger.info(
+                "Email sent successfully to=%s subject=%s attempt=%s",
+                to_email,
+                subject,
+                attempt,
+            )
+            return
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_exception = exc
+            logger.exception(
+                "Failed to send email to=%s subject=%s attempt=%s",
+                to_email,
+                subject,
+                attempt,
+            )
+
+            if attempt < 3:
+                time.sleep(2)
+
+    raise HTTPException(
+        status_code=500,
+        detail=f"Failed to send email: {last_exception}",
+    )
     
 def html_escape(value: Any) -> str:
     if value is None:
