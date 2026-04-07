@@ -837,34 +837,12 @@ app.add_middleware(
 def health_check():
     return {"status": "ok"}
 
-@app.post("/admin/promote-test-user")
-async def promote_test_user(
-    data: PromoteTestUserRequest,
-    db: Session = Depends(get_db),
-):
-    email = (data.email or "").strip().lower()
-
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required.")
-
-    user = db.query(User).filter(User.email == email).first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    user.subscription_status = "active"
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {
-        "status": "success",
-        "email": user.email,
-        "subscription_status": user.subscription_status,
-    }
 
 @app.post("/test-email")
-async def send_test_email(data: TestEmailRequest):
+async def send_test_email(
+    data: TestEmailRequest,
+    current_user: User = Depends(get_current_user),
+):
     recipient = (data.to_email or "").strip()
 
     if not recipient:
@@ -889,6 +867,7 @@ async def send_test_email(data: TestEmailRequest):
 @app.post("/send-dashboard-report")
 async def send_dashboard_report(
     data: SendDashboardReportRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     recipient = (data.to_email or "").strip()
@@ -900,6 +879,7 @@ async def send_dashboard_report(
         db.query(Dashboard)
         .filter(
             Dashboard.id == data.dashboard_id,
+            Dashboard.user_id == current_user.id,
         )
         .first()
     )
@@ -1898,6 +1878,9 @@ def build_dependent_filter_options(
     Rules:
     - Product options are narrowed by current date filters + selected customers
     - Customer options are narrowed by current date filters + selected products
+
+    Also returns compatibility maps so the frontend can narrow options instantly
+    before the user clicks Apply filters.
     """
     working_df = df.copy()
 
@@ -1922,6 +1905,27 @@ def build_dependent_filter_options(
 
     products: List[str] = []
     customers: List[str] = []
+    customer_to_products: Dict[str, List[str]] = {}
+    product_to_customers: Dict[str, List[str]] = {}
+
+    if product_col and customer_col and product_col in working_df.columns and customer_col in working_df.columns:
+        relation_df = working_df[[product_col, customer_col]].dropna().copy()
+        relation_df[product_col] = relation_df[product_col].astype(str).str.strip()
+        relation_df[customer_col] = relation_df[customer_col].astype(str).str.strip()
+        relation_df = relation_df[
+            (relation_df[product_col] != "") & (relation_df[customer_col] != "")
+        ]
+
+        if not relation_df.empty:
+            for customer_name, group in relation_df.groupby(customer_col):
+                customer_to_products[str(customer_name)] = sorted(
+                    group[product_col].dropna().astype(str).unique().tolist()
+                )
+
+            for product_name, group in relation_df.groupby(product_col):
+                product_to_customers[str(product_name)] = sorted(
+                    group[customer_col].dropna().astype(str).unique().tolist()
+                )
 
     product_df = working_df.copy()
     if selected_customers and customer_col and customer_col in product_df.columns:
@@ -1967,6 +1971,8 @@ def build_dependent_filter_options(
         "customers": customers,
         "min_date": min_date,
         "max_date": max_date,
+        "customer_to_products": customer_to_products,
+        "product_to_customers": product_to_customers,
     }
 
     """
@@ -2380,12 +2386,7 @@ async def analyze_with_mapping(
         "comparison_mode": comparison_mode,
         "comparison_preset": comparison_preset,
     },
-    "filter_options": {
-        "products": filter_options["products"],
-        "customers": filter_options["customers"],
-        "min_date": filter_options["min_date"],
-        "max_date": filter_options["max_date"],
-    },
+    "filter_options": filter_options,
 }
 
 # =============================================================
