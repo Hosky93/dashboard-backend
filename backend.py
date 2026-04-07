@@ -764,6 +764,10 @@ async def get_current_user(
 
 RATE_LIMIT: Dict[int, List[datetime]] = {}
 
+def require_admin(current_user: User):
+    if current_user.email != "test5@test.com":
+        raise HTTPException(status_code=403, detail="Admin only")
+
 
 def check_rate_limit(user_id: int) -> None:
     now = datetime.utcnow()
@@ -1816,6 +1820,97 @@ async def delete_saved_view(
     db.commit()
 
     return {"status": "success", "message": "Saved view deleted successfully"}
+
+@app.get("/admin/user-by-email")
+def admin_get_user_by_email(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "subscription_status": user.subscription_status,
+        "stripe_customer_id": user.stripe_customer_id,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+@app.post("/admin/set-subscription")
+def admin_set_subscription(
+    email: str,
+    subscription_status: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    allowed_statuses = {"trial", "active", "canceled"}
+    normalized_status = (subscription_status or "").strip().lower()
+
+    if normalized_status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail="subscription_status must be one of: trial, active, canceled",
+        )
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.subscription_status = normalized_status
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": f"{user.email} subscription updated",
+        "email": user.email,
+        "subscription_status": user.subscription_status,
+    }
+
+
+@app.get("/admin/user-dashboards")
+def admin_get_user_dashboards(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    dashboards = (
+        db.query(Dashboard)
+        .filter(Dashboard.user_id == user.id)
+        .order_by(Dashboard.created_at.desc())
+        .all()
+    )
+
+    return {
+        "user": {
+            "id": user.id,
+            "email": user.email,
+        },
+        "dashboards": [
+            {
+                "id": d.id,
+                "file_name": d.file_name,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in dashboards
+        ],
+    }
 
 def apply_dimension_filters(
     df,
