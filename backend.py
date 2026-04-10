@@ -101,9 +101,10 @@ STRIPE_CANCEL_PATH = os.getenv("STRIPE_CANCEL_PATH", "/billing/cancel").strip()
 REPORTS_CRON_SECRET = os.getenv("REPORTS_CRON_SECRET", "").strip()
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS", "onboarding@resend.dev").strip()
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Small Business Insights").strip()
+EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS", "reports@mail.easy-dash.io").strip()
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Dashboard Reports").strip()
 EMAIL_SEND_TIMEOUT_SECONDS = int(os.getenv("EMAIL_SEND_TIMEOUT_SECONDS", "20"))
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "support@easy-dash.io").strip().lower()
 
 stripe.api_key = STRIPE_SECRET_KEY or None
 
@@ -765,7 +766,7 @@ async def get_current_user(
 RATE_LIMIT: Dict[int, List[datetime]] = {}
 
 def require_admin(current_user: User):
-    if current_user.email != "test5@test.com":
+    if (current_user.email or "").strip().lower() != ADMIN_EMAIL:
         raise HTTPException(status_code=403, detail="Admin only")
 
 
