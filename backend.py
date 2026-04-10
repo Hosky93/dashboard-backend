@@ -22,6 +22,9 @@ import math
 import json
 import logging
 import requests
+import hmac
+import hashlib
+import base64
 
 logging.basicConfig(
     level=logging.INFO,
@@ -388,7 +391,47 @@ def send_email_message(
             status_code=500,
             detail=f"Failed to send email: {exc}",
         )
-    
+
+def verify_resend_webhook_signature(
+    *,
+    payload_text: str,
+    svix_id: str,
+    svix_timestamp: str,
+    svix_signature: str,
+    webhook_secret: str,
+) -> bool:
+    if not webhook_secret:
+        return False
+
+    if webhook_secret.startswith("whsec_"):
+        webhook_secret = webhook_secret[len("whsec_"):]
+
+    try:
+        secret_bytes = base64.b64decode(webhook_secret)
+    except Exception:
+        return False
+
+    signed_content = f"{svix_id}.{svix_timestamp}.{payload_text}".encode("utf-8")
+    expected_signature = base64.b64encode(
+        hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+    provided_signatures = []
+    for part in (svix_signature or "").split():
+        if part.startswith("v1,"):
+            provided_signatures.append(part.split(",", 1)[1])
+
+    if not provided_signatures:
+        for part in (svix_signature or "").split(","):
+            cleaned = part.strip()
+            if cleaned.startswith("v1="):
+                provided_signatures.append(cleaned.split("=", 1)[1])
+
+    return any(
+        hmac.compare_digest(expected_signature, sig)
+        for sig in provided_signatures
+    )
+
 def html_escape(value: Any) -> str:
     if value is None:
         return ""
@@ -1088,12 +1131,29 @@ async def resend_webhook(
     if not RESEND_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="RESEND_WEBHOOK_SECRET is not configured.")
 
-    incoming_secret = request.headers.get("authorization", "").replace("Bearer ", "").strip()
-    if incoming_secret != RESEND_WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid webhook secret.")
+    payload_text = await request.body()
+    payload_text = payload_text.decode("utf-8")
+
+    svix_id = request.headers.get("svix-id", "").strip()
+    svix_timestamp = request.headers.get("svix-timestamp", "").strip()
+    svix_signature = request.headers.get("svix-signature", "").strip()
+
+    if not svix_id or not svix_timestamp or not svix_signature:
+        raise HTTPException(status_code=401, detail="Missing webhook signature headers.")
+
+    is_valid = verify_resend_webhook_signature(
+        payload_text=payload_text,
+        svix_id=svix_id,
+        svix_timestamp=svix_timestamp,
+        svix_signature=svix_signature,
+        webhook_secret=RESEND_WEBHOOK_SECRET,
+    )
+
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
 
     try:
-        payload = await request.json()
+        payload = json.loads(payload_text)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload.")
 
@@ -1109,16 +1169,13 @@ async def resend_webhook(
     to_email = None
     subject = None
 
-    try:
-        to_value = data.get("to")
-        if isinstance(to_value, list) and to_value:
-            to_email = str(to_value[0])
-        elif isinstance(to_value, str):
-            to_email = to_value
+    to_value = data.get("to")
+    if isinstance(to_value, list) and to_value:
+        to_email = str(to_value[0])
+    elif isinstance(to_value, str):
+        to_email = to_value
 
-        subject = data.get("subject")
-    except Exception:
-        pass
+    subject = data.get("subject")
 
     email_event = EmailEvent(
         resend_email_id=resend_email_id,
