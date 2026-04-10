@@ -22,9 +22,7 @@ import math
 import json
 import logging
 import requests
-import hmac
-import hashlib
-import base64
+from svix.webhooks import Webhook, WebhookVerificationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -391,42 +389,6 @@ def send_email_message(
             status_code=500,
             detail=f"Failed to send email: {exc}",
         )
-
-def verify_resend_webhook_signature(
-    *,
-    payload_text: str,
-    svix_id: str,
-    svix_timestamp: str,
-    svix_signature: str,
-    webhook_secret: str,
-) -> bool:
-    if not webhook_secret:
-        return False
-
-    if webhook_secret.startswith("whsec_"):
-        webhook_secret = webhook_secret[len("whsec_"):]
-
-    try:
-        secret_bytes = base64.b64decode(webhook_secret)
-    except Exception:
-        return False
-
-    signed_content = f"{svix_id}.{svix_timestamp}.{payload_text}".encode("utf-8")
-    expected_signature = base64.b64encode(
-        hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
-    ).decode("utf-8")
-
-    provided_signatures = []
-
-    for part in (svix_signature or "").split(","):
-        part = part.strip()
-        if part.startswith("v1="):
-            provided_signatures.append(part.split("=", 1)[1])
-
-    return any(
-        hmac.compare_digest(expected_signature, sig)
-        for sig in provided_signatures
-    )
 
 def html_escape(value: Any) -> str:
     if value is None:
@@ -1127,31 +1089,22 @@ async def resend_webhook(
     if not RESEND_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="RESEND_WEBHOOK_SECRET is not configured.")
 
-    payload_text = await request.body()
-    payload_text = payload_text.decode("utf-8")
+    payload_bytes = await request.body()
+    payload_text = payload_bytes.decode("utf-8")
 
-    svix_id = request.headers.get("svix-id", "").strip()
-    svix_timestamp = request.headers.get("svix-timestamp", "").strip()
-    svix_signature = request.headers.get("svix-signature", "").strip()
-
-    if not svix_id or not svix_timestamp or not svix_signature:
-        raise HTTPException(status_code=401, detail="Missing webhook signature headers.")
-
-    is_valid = verify_resend_webhook_signature(
-        payload_text=payload_text,
-        svix_id=svix_id,
-        svix_timestamp=svix_timestamp,
-        svix_signature=svix_signature,
-        webhook_secret=RESEND_WEBHOOK_SECRET,
-    )
-
-    if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    headers = {
+        "svix-id": request.headers.get("svix-id", ""),
+        "svix-timestamp": request.headers.get("svix-timestamp", ""),
+        "svix-signature": request.headers.get("svix-signature", ""),
+    }
 
     try:
-        payload = json.loads(payload_text)
+        wh = Webhook(RESEND_WEBHOOK_SECRET)
+        payload = wh.verify(payload_text, headers)
+    except WebhookVerificationError:
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
 
     event_type = (payload.get("type") or "").strip()
     data = payload.get("data") or {}
