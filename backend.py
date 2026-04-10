@@ -417,15 +417,11 @@ def verify_resend_webhook_signature(
     ).decode("utf-8")
 
     provided_signatures = []
-    for part in (svix_signature or "").split():
-        if part.startswith("v1,"):
-            provided_signatures.append(part.split(",", 1)[1])
 
-    if not provided_signatures:
-        for part in (svix_signature or "").split(","):
-            cleaned = part.strip()
-            if cleaned.startswith("v1="):
-                provided_signatures.append(cleaned.split("=", 1)[1])
+    for part in (svix_signature or "").split(","):
+        part = part.strip()
+        if part.startswith("v1="):
+            provided_signatures.append(part.split("=", 1)[1])
 
     return any(
         hmac.compare_digest(expected_signature, sig)
@@ -936,10 +932,10 @@ async def send_test_email(
 
     send_email_message(
         to_email=recipient,
-        subject="Small Business Insights - Test Email",
+        subject="Dashboard Reports - Test Email",
         body_text=(
             f"Hello,\n\n"
-            f"This is a test email from your Small Business Insights SaaS.\n\n"
+            f"This is a test email from Dashboard Reports.\n\n"
             f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
             f"If you received this, your email sending is working."
         ),
