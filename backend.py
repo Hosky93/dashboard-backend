@@ -136,6 +136,16 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
 class TestEmailRequest(BaseModel):
     to_email: str
 
@@ -155,6 +165,13 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     subscription_status = Column(String, default="trial")  # trial, active, canceled
     stripe_customer_id = Column(String, nullable=True)
+
+    email_verified = Column(Boolean, nullable=False, default=False)
+    email_verification_token = Column(String, nullable=True, index=True)
+    email_verification_expires_at = Column(DateTime, nullable=True)
+
+    password_reset_token = Column(String, nullable=True, index=True)
+    password_reset_expires_at = Column(DateTime, nullable=True)
 
     dashboards = relationship("Dashboard", back_populates="user")
 
@@ -249,7 +266,37 @@ def run_sqlite_safe_migrations() -> None:
                     "ALTER TABLE saved_views ADD COLUMN last_report_error TEXT"
                 )
 
+            user_columns_result = conn.exec_driver_sql("PRAGMA table_info(users)")
+            user_columns = user_columns_result.fetchall()
+            existing_user_columns = {row[1] for row in user_columns}
+
+            if "email_verified" not in existing_user_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT 0"
+                )
+
+            if "email_verification_token" not in existing_user_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN email_verification_token TEXT"
+                )
+
+            if "email_verification_expires_at" not in existing_user_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN email_verification_expires_at DATETIME"
+                )
+
+            if "password_reset_token" not in existing_user_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN password_reset_token TEXT"
+                )
+
+            if "password_reset_expires_at" not in existing_user_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME"
+                )
+
             # Normalize old string-like values into SQLite boolean style (1 / 0)
+
             conn.exec_driver_sql("""
                 UPDATE saved_views
                 SET report_enabled = 1
@@ -769,6 +816,91 @@ def create_access_token(data: dict, expires: Optional[timedelta] = None) -> str:
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
     return db.query(User).filter(User.email == email).first()
+
+
+def generate_secure_token() -> str:
+    return str(uuid4()) + str(uuid4()).replace("-", "")
+
+
+def get_email_verification_link(token: str) -> str:
+    return f"{FRONTEND_BASE_URL}/verify-email?token={token}"
+
+
+def get_password_reset_link(token: str) -> str:
+    return f"{FRONTEND_BASE_URL}/reset-password?token={token}"
+
+
+def send_verification_email(user: User) -> None:
+    verification_link = get_email_verification_link(user.email_verification_token)
+
+    send_email_message(
+        to_email=user.email,
+        subject="Verify your Easy-dash email",
+        body_text=(
+            f"Hello,\n\n"
+            f"Please verify your email address for Easy-dash by opening the link below:\n\n"
+            f"{verification_link}\n\n"
+            f"This link will expire in 24 hours."
+        ),
+        body_html=f"""
+            <div style="font-family:Arial,Helvetica,sans-serif;background:#020617;padding:32px;color:#e5e7eb;">
+              <div style="max-width:620px;margin:0 auto;border:1px solid #1e293b;border-radius:24px;background:#0f172a;padding:32px;">
+                <p style="margin:0 0 12px 0;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.08em;">
+                  Easy-dash
+                </p>
+                <h1 style="margin:0 0 12px 0;color:#ffffff;font-size:28px;">Verify your email</h1>
+                <p style="margin:0 0 24px 0;color:#cbd5e1;line-height:1.7;">
+                  Please confirm your email address to finish setting up your Easy-dash account.
+                </p>
+                <a href="{verification_link}" style="display:inline-block;padding:12px 18px;border-radius:12px;background:#ffffff;color:#0f172a;text-decoration:none;font-weight:600;">
+                  Verify email
+                </a>
+                <p style="margin:24px 0 0 0;color:#94a3b8;font-size:14px;line-height:1.7;">
+                  Or open this link:<br />
+                  <a href="{verification_link}" style="color:#34d399;">{verification_link}</a>
+                </p>
+              </div>
+            </div>
+        """.strip(),
+    )
+
+
+def send_password_reset_email(user: User) -> None:
+    reset_link = get_password_reset_link(user.password_reset_token)
+
+    send_email_message(
+        to_email=user.email,
+        subject="Reset your Easy-dash password",
+        body_text=(
+            f"Hello,\n\n"
+            f"You requested a password reset for Easy-dash.\n\n"
+            f"Open the link below to choose a new password:\n\n"
+            f"{reset_link}\n\n"
+            f"If you did not request this, you can ignore this email.\n\n"
+            f"This link will expire in 1 hour."
+        ),
+        body_html=f"""
+            <div style="font-family:Arial,Helvetica,sans-serif;background:#020617;padding:32px;color:#e5e7eb;">
+              <div style="max-width:620px;margin:0 auto;border:1px solid #1e293b;border-radius:24px;background:#0f172a;padding:32px;">
+                <p style="margin:0 0 12px 0;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.08em;">
+                  Easy-dash
+                </p>
+                <h1 style="margin:0 0 12px 0;color:#ffffff;font-size:28px;">Reset your password</h1>
+                <p style="margin:0 0 24px 0;color:#cbd5e1;line-height:1.7;">
+                  We received a request to reset your password. Use the button below to choose a new one.
+                </p>
+                <a href="{reset_link}" style="display:inline-block;padding:12px 18px;border-radius:12px;background:#ffffff;color:#0f172a;text-decoration:none;font-weight:600;">
+                  Reset password
+                </a>
+                <p style="margin:24px 0 0 0;color:#94a3b8;font-size:14px;line-height:1.7;">
+                  Or open this link:<br />
+                  <a href="{reset_link}" style="color:#34d399;">{reset_link}</a>
+                </p>
+              </div>
+            </div>
+        """.strip(),
+    )
+
 
 def user_has_active_subscription(user: User) -> bool:
     return (user.subscription_status or "").strip().lower() == "active"
@@ -3869,7 +4001,8 @@ def analyze_sales(
 
 @app.post("/auth/signup")
 def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
-    existing_user = get_user_by_email(db, payload.email.lower().strip())
+    email = payload.email.lower().strip()
+    existing_user = get_user_by_email(db, email)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered.")
 
@@ -3887,13 +4020,23 @@ def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
     if not re.search(r"\d", password):
         raise HTTPException(status_code=400, detail="Password must include a number.")
 
+    verification_token = generate_secure_token()
+
     user = User(
-        email=payload.email.lower().strip(),
+        email=email,
         hashed_password=hash_password(payload.password),
+        email_verified=False,
+        email_verification_token=verification_token,
+        email_verification_expires_at=datetime.utcnow() + timedelta(hours=24),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    try:
+        send_verification_email(user)
+    except Exception:
+        logger.exception("Failed sending verification email to user_id=%s", user.id)
 
     token = create_access_token({"sub": user.email})
 
@@ -3904,8 +4047,11 @@ def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
             "id": user.id,
             "email": user.email,
             "subscription_status": user.subscription_status,
+            "email_verified": bool(user.email_verified),
         },
+        "message": "Account created. Please verify your email address.",
     }
+
 
 @app.post("/auth/login")
 def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
@@ -3913,6 +4059,12 @@ def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Please verify your email before signing in."
+        )
+
     token = create_access_token({"sub": user.email})
 
     return {
@@ -3922,8 +4074,134 @@ def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
             "id": user.id,
             "email": user.email,
             "subscription_status": user.subscription_status,
+            "email_verified": bool(user.email_verified),
         },
     }
+
+
+@app.post("/auth/verify-email")
+def verify_email(data: dict = Body(...), db: Session = Depends(get_db)):
+    token = (data.get("token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Verification token is required.")
+
+    user = db.query(User).filter(User.email_verification_token == token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid verification link.")
+
+    if not user.email_verification_expires_at or user.email_verification_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification link has expired.")
+
+    user.email_verified = True
+    user.email_verification_token = None
+    user.email_verification_expires_at = None
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "success",
+        "message": "Email verified successfully.",
+    }
+
+
+@app.post("/auth/resend-verification")
+def resend_verification_email(data: dict = Body(...), db: Session = Depends(get_db)):
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
+    user = get_user_by_email(db, email)
+    if not user:
+        return {
+            "status": "success",
+            "message": "If an account exists for that email, a verification email has been sent.",
+        }
+
+    if user.email_verified:
+        return {
+            "status": "success",
+            "message": "That email is already verified.",
+        }
+
+    user.email_verification_token = generate_secure_token()
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=24)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    try:
+        send_verification_email(user)
+    except Exception:
+        logger.exception("Failed resending verification email to user_id=%s", user.id)
+
+    return {
+        "status": "success",
+        "message": "If an account exists for that email, a verification email has been sent.",
+    }
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest = Body(...), db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    user = get_user_by_email(db, email)
+
+    if user:
+        user.password_reset_token = generate_secure_token()
+        user.password_reset_expires_at = datetime.utcnow() + timedelta(hours=1)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        try:
+            send_password_reset_email(user)
+        except Exception:
+            logger.exception("Failed sending password reset email to user_id=%s", user.id)
+
+    return {
+        "status": "success",
+        "message": "If an account exists for that email, a reset link has been sent.",
+    }
+
+
+@app.post("/auth/reset-password")
+def reset_password(payload: ResetPasswordRequest = Body(...), db: Session = Depends(get_db)):
+    token = (payload.token or "").strip()
+    password = payload.password
+
+    if not token:
+        raise HTTPException(status_code=400, detail="Reset token is required.")
+
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(status_code=400, detail="Password must include an uppercase letter.")
+
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(status_code=400, detail="Password must include a lowercase letter.")
+
+    if not re.search(r"\d", password):
+        raise HTTPException(status_code=400, detail="Password must include a number.")
+
+    user = db.query(User).filter(User.password_reset_token == token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid reset link.")
+
+    if not user.password_reset_expires_at or user.password_reset_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Reset link has expired.")
+
+    user.hashed_password = hash_password(password)
+    user.password_reset_token = None
+    user.password_reset_expires_at = None
+    db.add(user)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Password updated successfully.",
+    }
+
 
 @app.get("/auth/me")
 async def get_me(current_user: User = Depends(get_current_user)):
@@ -3932,6 +4210,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "subscription_status": current_user.subscription_status or "trial",
         "is_paid": user_has_active_subscription(current_user),
+        "email_verified": bool(current_user.email_verified),
     }
 
 # =============================================================
