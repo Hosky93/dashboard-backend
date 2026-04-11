@@ -1869,6 +1869,29 @@ async def delete_dashboard(
 
     return {"message": "Dashboard deleted successfully"}
 
+@app.get("/dashboards")
+async def list_dashboards(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    dashboards = (
+        db.query(Dashboard)
+        .filter(Dashboard.user_id == current_user.id)
+        .order_by(Dashboard.created_at.desc())
+        .all()
+    )
+
+    return {
+        "dashboards": [
+            {
+                "id": dashboard.id,
+                "file_name": dashboard.file_name,
+                "created_at": dashboard.created_at.isoformat() if dashboard.created_at else None,
+            }
+            for dashboard in dashboards
+        ]
+    }
+
 @app.get("/dashboard/{dashboard_id}/views")
 async def get_saved_views(
     dashboard_id: int,
