@@ -276,87 +276,88 @@ def run_migrations():
 
 run_migrations()
 
-def run_sqlite_safe_migrations() -> None:
+def run_safe_migrations() -> None:
     """
-    Tiny migration helper for local SQLite development only.
-    Adds missing SavedView scheduling columns if they do not exist yet.
-    Also normalises old report_enabled values into 0/1 form for SQLite.
+    Lightweight startup migrations for both SQLite and Postgres.
+    Adds missing auth/reporting columns without requiring shell access.
     """
-    if not DATABASE_URL.startswith("sqlite"):
-        return
-
     try:
         with engine.connect() as conn:
-            result = conn.exec_driver_sql("PRAGMA table_info(saved_views)")
-            columns = result.fetchall()
-            existing_columns = {row[1] for row in columns}
+            if DATABASE_URL.startswith("sqlite"):
+                saved_view_columns_result = conn.exec_driver_sql("PRAGMA table_info(saved_views)")
+                saved_view_columns = saved_view_columns_result.fetchall()
+                existing_saved_view_columns = {row[1] for row in saved_view_columns}
 
-            if "last_report_sent_at" not in existing_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE saved_views ADD COLUMN last_report_sent_at DATETIME"
-                )
+                user_columns_result = conn.exec_driver_sql("PRAGMA table_info(users)")
+                user_columns = user_columns_result.fetchall()
+                existing_user_columns = {row[1] for row in user_columns}
 
-            if "last_report_started_at" not in existing_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE saved_views ADD COLUMN last_report_started_at DATETIME"
-                )
+            else:
+                saved_view_columns_result = conn.exec_driver_sql("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'saved_views'
+                """)
+                existing_saved_view_columns = {row[0] for row in saved_view_columns_result.fetchall()}
 
-            if "last_report_error" not in existing_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE saved_views ADD COLUMN last_report_error TEXT"
-                )
+                user_columns_result = conn.exec_driver_sql("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'users'
+                """)
+                existing_user_columns = {row[0] for row in user_columns_result.fetchall()}
 
-            user_columns_result = conn.exec_driver_sql("PRAGMA table_info(users)")
-            user_columns = user_columns_result.fetchall()
-            existing_user_columns = {row[1] for row in user_columns}
+            if "last_report_sent_at" not in existing_saved_view_columns:
+                conn.exec_driver_sql("ALTER TABLE saved_views ADD COLUMN last_report_sent_at TIMESTAMP")
+
+            if "last_report_started_at" not in existing_saved_view_columns:
+                conn.exec_driver_sql("ALTER TABLE saved_views ADD COLUMN last_report_started_at TIMESTAMP")
+
+            if "last_report_error" not in existing_saved_view_columns:
+                conn.exec_driver_sql("ALTER TABLE saved_views ADD COLUMN last_report_error TEXT")
 
             if "email_verified" not in existing_user_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT 0"
-                )
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE")
 
             if "email_verification_token" not in existing_user_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE users ADD COLUMN email_verification_token TEXT"
-                )
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN email_verification_token TEXT")
 
             if "email_verification_expires_at" not in existing_user_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE users ADD COLUMN email_verification_expires_at DATETIME"
-                )
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN email_verification_expires_at TIMESTAMP")
 
             if "password_reset_token" not in existing_user_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE users ADD COLUMN password_reset_token TEXT"
-                )
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_reset_token TEXT")
 
             if "password_reset_expires_at" not in existing_user_columns:
-                conn.exec_driver_sql(
-                    "ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME"
-                )
-
-            # Normalize old string-like values into SQLite boolean style (1 / 0)
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_reset_expires_at TIMESTAMP")
 
             conn.exec_driver_sql("""
-                UPDATE saved_views
-                SET report_enabled = 1
-                WHERE LOWER(TRIM(CAST(report_enabled AS TEXT))) IN ('true', '1', 'yes', 'on')
+                UPDATE users
+                SET email_verified = TRUE
+                WHERE email = 'live5@test.com'
             """)
 
-            conn.exec_driver_sql("""
-                UPDATE saved_views
-                SET report_enabled = 0
-                WHERE LOWER(TRIM(CAST(report_enabled AS TEXT))) IN ('false', '0', 'no', 'off', '')
-                   OR report_enabled IS NULL
-            """)
+            if DATABASE_URL.startswith("sqlite"):
+                conn.exec_driver_sql("""
+                    UPDATE saved_views
+                    SET report_enabled = 1
+                    WHERE LOWER(TRIM(CAST(report_enabled AS TEXT))) IN ('true', '1', 'yes', 'on')
+                """)
+
+                conn.exec_driver_sql("""
+                    UPDATE saved_views
+                    SET report_enabled = 0
+                    WHERE LOWER(TRIM(CAST(report_enabled AS TEXT))) IN ('false', '0', 'no', 'off', '')
+                       OR report_enabled IS NULL
+                """)
 
             conn.commit()
     except Exception:
-        logger.exception("Failed running SQLite safe migrations.")
+        logger.exception("Failed running startup migrations.")
         raise
 
 
-run_sqlite_safe_migrations()
+run_safe_migrations()
 
 # =============================================================
 # EMAIL
