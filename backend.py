@@ -381,6 +381,8 @@ def send_email_message(
     subject: str,
     body_text: str,
     body_html: Optional[str] = None,
+    from_address: Optional[str] = None,
+    from_name: Optional[str] = None,
 ) -> None:
     """
     Send an email using the Resend API.
@@ -405,8 +407,16 @@ def send_email_message(
             detail="Email is not configured on the server.",
         )
 
+    sender_address = (from_address or EMAIL_FROM_ADDRESS).strip()
+    sender_name = (from_name or EMAIL_FROM_NAME).strip()
+
+    if sender_name:
+        sender_header = f"{sender_name} <{sender_address}>"
+    else:
+        sender_header = sender_address
+
     payload = {
-        "from": build_from_header(),
+        "from": sender_header,
         "to": [to_email],
         "subject": subject,
         "text": body_text,
@@ -573,10 +583,12 @@ def send_saved_view_report_email(
     )
 
     send_email_message(
-        to_email=(saved_view.report_recipient or "").strip(),
-        subject=f"Your dashboard report: {dashboard.file_name}",
-        body_text=email_body_text,
-        body_html=email_body_html,
+    to_email=(saved_view.report_recipient or "").strip(),
+    subject=f"Your dashboard report: {dashboard.file_name}",
+    body_text=email_body_text,
+    body_html=email_body_html,
+    from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+    from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
     )
 
 def build_dashboard_report_email_text(
@@ -1131,14 +1143,16 @@ async def send_test_email(
         raise HTTPException(status_code=400, detail="Recipient email is required.")
 
     send_email_message(
-        to_email=recipient,
-        subject="Dashboard Reports - Test Email",
-        body_text=(
-            f"Hello,\n\n"
-            f"This is a test email from Dashboard Reports.\n\n"
-            f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
-            f"If you received this, your email sending is working."
-        ),
+    to_email=recipient,
+    subject="Dashboard Reports - Test Email",
+    body_text=(
+        f"Hello,\n\n"
+        f"This is a test email from Dashboard Reports.\n\n"
+        f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+        f"If you received this, your email sending is working."
+    ),
+    from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+    from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
     )
 
     return {
@@ -1185,10 +1199,12 @@ async def send_dashboard_report(
     )
 
     send_email_message(
-        to_email=recipient,
-        subject=f"Your dashboard report: {dashboard.file_name}",
-        body_text=email_body_text,
-        body_html=email_body_html,
+    to_email=recipient,
+    subject=f"Your dashboard report: {dashboard.file_name}",
+    body_text=email_body_text,
+    body_html=email_body_html,
+    from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+    from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
     )
 
     return {
