@@ -236,6 +236,46 @@ class SavedView(Base):
 
 Base.metadata.create_all(bind=engine)
 
+from sqlalchemy import text
+
+def run_migrations():
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verification_token TEXT"))
+        except Exception:
+            pass
+
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verification_expires_at DATETIME"))
+        except Exception:
+            pass
+
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token TEXT"))
+        except Exception:
+            pass
+
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME"))
+        except Exception:
+            pass
+
+        # Ensure your test user still works
+        try:
+            conn.execute(
+                text("UPDATE users SET email_verified = 1 WHERE email = :email"),
+                {"email": "live5@test.com"}
+            )
+        except Exception:
+            pass
+
+run_migrations()
+
 def run_sqlite_safe_migrations() -> None:
     """
     Tiny migration helper for local SQLite development only.
