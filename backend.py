@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
+import hashlib
+import secrets
 
 from fastapi import Body
 import re
@@ -860,7 +862,11 @@ def get_user_by_email(db: Session, email: str) -> Optional[User]:
 
 
 def generate_secure_token() -> str:
-    return str(uuid4()) + str(uuid4()).replace("-", "")
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def get_email_verification_link(token: str) -> str:
@@ -871,8 +877,8 @@ def get_password_reset_link(token: str) -> str:
     return f"{FRONTEND_BASE_URL}/reset-password?token={token}"
 
 
-def send_verification_email(user: User) -> None:
-    verification_link = get_email_verification_link(user.email_verification_token)
+def send_verification_email(user: User, raw_token: str) -> None:
+    verification_link = get_email_verification_link(raw_token)
 
     send_email_message(
         to_email=user.email,
@@ -906,8 +912,8 @@ def send_verification_email(user: User) -> None:
     )
 
 
-def send_password_reset_email(user: User) -> None:
-    reset_link = get_password_reset_link(user.password_reset_token)
+def send_password_reset_email(user: User, raw_token: str) -> None:
+    reset_link = get_password_reset_link(raw_token)
 
     send_email_message(
         to_email=user.email,
@@ -974,6 +980,8 @@ async def get_current_user(
 # =============================================================
 
 RATE_LIMIT: Dict[int, List[datetime]] = {}
+PDF_RATE_LIMIT: Dict[int, List[datetime]] = {}
+AUTH_RATE_LIMIT: Dict[str, List[datetime]] = {}
 
 def require_admin(current_user: User):
     if (current_user.email or "").strip().lower() != ADMIN_EMAIL:
@@ -991,7 +999,64 @@ def check_rate_limit(user_id: int) -> None:
         )
     timestamps.append(now)
     RATE_LIMIT[user_id] = timestamps
-PDF_RATE_LIMIT: Dict[int, List[datetime]] = {}
+
+
+def get_client_ip(request: Optional[Request]) -> str:
+    if not request:
+        return "unknown"
+
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded_for:
+        return forwarded_for
+
+    if request.client and request.client.host:
+        return request.client.host
+
+    return "unknown"
+
+
+def auth_rate_limit_key(action: str, request: Optional[Request], email: Optional[str] = None) -> str:
+    normalized_email = (email or "").strip().lower() or "anonymous"
+    return f"{action}:{get_client_ip(request)}:{normalized_email}"
+
+
+def check_auth_rate_limit(
+    key: str,
+    *,
+    max_attempts: int,
+    window_seconds: int,
+    detail: str,
+) -> None:
+    now = datetime.utcnow()
+    window_start = now - timedelta(seconds=window_seconds)
+    timestamps = [t for t in AUTH_RATE_LIMIT.get(key, []) if t > window_start]
+
+    if len(timestamps) >= max_attempts:
+        raise HTTPException(status_code=429, detail=detail)
+
+    timestamps.append(now)
+    AUTH_RATE_LIMIT[key] = timestamps
+
+
+def log_auth_event(
+    event: str,
+    *,
+    outcome: str,
+    request: Optional[Request] = None,
+    email: Optional[str] = None,
+    user_id: Optional[int] = None,
+    detail: Optional[str] = None,
+) -> None:
+    log_fn = logger.info if outcome == "success" else logger.warning
+    log_fn(
+        "auth_event event=%s outcome=%s email=%s user_id=%s ip=%s detail=%s",
+        event,
+        outcome,
+        (email or "").strip().lower() or None,
+        user_id,
+        get_client_ip(request),
+        detail,
+    )
 
 
 def check_pdf_rate_limit(user_id: int, max_per_hour: int = 60) -> None:
@@ -4041,33 +4106,50 @@ def analyze_sales(
 # =============================================================
 
 @app.post("/auth/signup")
-def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
+def signup(
+    request: Request,
+    payload: SignupRequest = Body(...),
+    db: Session = Depends(get_db),
+):
     email = payload.email.lower().strip()
+
+    check_auth_rate_limit(
+        auth_rate_limit_key("signup", request, email),
+        max_attempts=5,
+        window_seconds=15 * 60,
+        detail="Too many signup attempts. Please try again in a few minutes.",
+    )
+
     existing_user = get_user_by_email(db, email)
     if existing_user:
+        log_auth_event("signup", outcome="rejected", request=request, email=email, detail="email_already_registered")
         raise HTTPException(status_code=400, detail="Email already registered.")
 
     password = payload.password
 
     if len(password) < 8:
+        log_auth_event("signup", outcome="rejected", request=request, email=email, detail="password_too_short")
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
 
     if not re.search(r"[A-Z]", password):
+        log_auth_event("signup", outcome="rejected", request=request, email=email, detail="missing_uppercase")
         raise HTTPException(status_code=400, detail="Password must include an uppercase letter.")
 
     if not re.search(r"[a-z]", password):
+        log_auth_event("signup", outcome="rejected", request=request, email=email, detail="missing_lowercase")
         raise HTTPException(status_code=400, detail="Password must include a lowercase letter.")
 
     if not re.search(r"\d", password):
+        log_auth_event("signup", outcome="rejected", request=request, email=email, detail="missing_number")
         raise HTTPException(status_code=400, detail="Password must include a number.")
 
-    verification_token = generate_secure_token()
+    raw_verification_token = generate_secure_token()
 
     user = User(
         email=email,
         hashed_password=hash_password(payload.password),
         email_verified=False,
-        email_verification_token=verification_token,
+        email_verification_token=hash_token(raw_verification_token),
         email_verification_expires_at=datetime.utcnow() + timedelta(hours=24),
     )
     db.add(user)
@@ -4075,9 +4157,11 @@ def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
     db.refresh(user)
 
     try:
-        send_verification_email(user)
+        send_verification_email(user, raw_verification_token)
     except Exception:
         logger.exception("Failed sending verification email to user_id=%s", user.id)
+
+    log_auth_event("signup", outcome="success", request=request, email=user.email, user_id=user.id)
 
     token = create_access_token({"sub": user.email})
 
@@ -4095,18 +4179,35 @@ def signup(payload: SignupRequest = Body(...), db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
-    user = get_user_by_email(db, payload.email.lower().strip())
+def login(
+    request: Request,
+    payload: LoginRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    email = payload.email.lower().strip()
+
+    check_auth_rate_limit(
+        auth_rate_limit_key("login", request, email),
+        max_attempts=10,
+        window_seconds=15 * 60,
+        detail="Too many login attempts. Please try again in a few minutes.",
+    )
+
+    user = get_user_by_email(db, email)
     if not user or not verify_password(payload.password, user.hashed_password):
+        log_auth_event("login", outcome="rejected", request=request, email=email, detail="invalid_credentials")
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     if not user.email_verified:
+        log_auth_event("login", outcome="rejected", request=request, email=email, user_id=user.id, detail="email_not_verified")
         raise HTTPException(
             status_code=403,
             detail="Please verify your email before signing in."
         )
 
     token = create_access_token({"sub": user.email})
+
+    log_auth_event("login", outcome="success", request=request, email=user.email, user_id=user.id)
 
     return {
         "access_token": token,
@@ -4121,16 +4222,24 @@ def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
 
 
 @app.post("/auth/verify-email")
-def verify_email(data: dict = Body(...), db: Session = Depends(get_db)):
-    token = (data.get("token") or "").strip()
-    if not token:
+def verify_email(
+    request: Request,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    raw_token = (data.get("token") or "").strip()
+    if not raw_token:
         raise HTTPException(status_code=400, detail="Verification token is required.")
 
-    user = db.query(User).filter(User.email_verification_token == token).first()
+    token_hash = hash_token(raw_token)
+
+    user = db.query(User).filter(User.email_verification_token == token_hash).first()
     if not user:
+        log_auth_event("verify_email", outcome="rejected", request=request, detail="invalid_token")
         raise HTTPException(status_code=400, detail="Invalid verification link.")
 
     if not user.email_verification_expires_at or user.email_verification_expires_at < datetime.utcnow():
+        log_auth_event("verify_email", outcome="rejected", request=request, email=user.email, user_id=user.id, detail="expired_token")
         raise HTTPException(status_code=400, detail="Verification link has expired.")
 
     user.email_verified = True
@@ -4140,6 +4249,8 @@ def verify_email(data: dict = Body(...), db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    log_auth_event("verify_email", outcome="success", request=request, email=user.email, user_id=user.id)
+
     return {
         "status": "success",
         "message": "Email verified successfully.",
@@ -4147,34 +4258,50 @@ def verify_email(data: dict = Body(...), db: Session = Depends(get_db)):
 
 
 @app.post("/auth/resend-verification")
-def resend_verification_email(data: dict = Body(...), db: Session = Depends(get_db)):
+def resend_verification_email(
+    request: Request,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
     email = (data.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required.")
 
+    check_auth_rate_limit(
+        auth_rate_limit_key("resend_verification", request, email),
+        max_attempts=5,
+        window_seconds=60 * 60,
+        detail="Too many verification email requests. Please try again later.",
+    )
+
     user = get_user_by_email(db, email)
     if not user:
+        log_auth_event("resend_verification", outcome="rejected", request=request, email=email, detail="user_not_found")
         return {
             "status": "success",
             "message": "If an account exists for that email, a verification email has been sent.",
         }
 
     if user.email_verified:
+        log_auth_event("resend_verification", outcome="rejected", request=request, email=email, user_id=user.id, detail="already_verified")
         return {
             "status": "success",
             "message": "That email is already verified.",
         }
 
-    user.email_verification_token = generate_secure_token()
+    raw_verification_token = generate_secure_token()
+    user.email_verification_token = hash_token(raw_verification_token)
     user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=24)
     db.add(user)
     db.commit()
     db.refresh(user)
 
     try:
-        send_verification_email(user)
+        send_verification_email(user, raw_verification_token)
     except Exception:
         logger.exception("Failed resending verification email to user_id=%s", user.id)
+
+    log_auth_event("resend_verification", outcome="success", request=request, email=user.email, user_id=user.id)
 
     return {
         "status": "success",
@@ -4183,21 +4310,38 @@ def resend_verification_email(data: dict = Body(...), db: Session = Depends(get_
 
 
 @app.post("/auth/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest = Body(...), db: Session = Depends(get_db)):
+def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest = Body(...),
+    db: Session = Depends(get_db),
+):
     email = payload.email.lower().strip()
+
+    check_auth_rate_limit(
+        auth_rate_limit_key("forgot_password", request, email),
+        max_attempts=5,
+        window_seconds=15 * 60,
+        detail="Too many password reset requests. Please try again later.",
+    )
+
     user = get_user_by_email(db, email)
 
     if user:
-        user.password_reset_token = generate_secure_token()
+        raw_reset_token = generate_secure_token()
+        user.password_reset_token = hash_token(raw_reset_token)
         user.password_reset_expires_at = datetime.utcnow() + timedelta(hours=1)
         db.add(user)
         db.commit()
         db.refresh(user)
 
         try:
-            send_password_reset_email(user)
+            send_password_reset_email(user, raw_reset_token)
         except Exception:
             logger.exception("Failed sending password reset email to user_id=%s", user.id)
+
+        log_auth_event("forgot_password", outcome="success", request=request, email=user.email, user_id=user.id)
+    else:
+        log_auth_event("forgot_password", outcome="rejected", request=request, email=email, detail="user_not_found")
 
     return {
         "status": "success",
@@ -4206,11 +4350,22 @@ def forgot_password(payload: ForgotPasswordRequest = Body(...), db: Session = De
 
 
 @app.post("/auth/reset-password")
-def reset_password(payload: ResetPasswordRequest = Body(...), db: Session = Depends(get_db)):
-    token = (payload.token or "").strip()
+def reset_password(
+    request: Request,
+    payload: ResetPasswordRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    raw_token = (payload.token or "").strip()
     password = payload.password
 
-    if not token:
+    check_auth_rate_limit(
+        auth_rate_limit_key("reset_password", request),
+        max_attempts=10,
+        window_seconds=60 * 60,
+        detail="Too many password reset attempts. Please try again later.",
+    )
+
+    if not raw_token:
         raise HTTPException(status_code=400, detail="Reset token is required.")
 
     if len(password) < 8:
@@ -4225,11 +4380,15 @@ def reset_password(payload: ResetPasswordRequest = Body(...), db: Session = Depe
     if not re.search(r"\d", password):
         raise HTTPException(status_code=400, detail="Password must include a number.")
 
-    user = db.query(User).filter(User.password_reset_token == token).first()
+    token_hash = hash_token(raw_token)
+
+    user = db.query(User).filter(User.password_reset_token == token_hash).first()
     if not user:
+        log_auth_event("reset_password", outcome="rejected", request=request, detail="invalid_token")
         raise HTTPException(status_code=400, detail="Invalid reset link.")
 
     if not user.password_reset_expires_at or user.password_reset_expires_at < datetime.utcnow():
+        log_auth_event("reset_password", outcome="rejected", request=request, email=user.email, user_id=user.id, detail="expired_token")
         raise HTTPException(status_code=400, detail="Reset link has expired.")
 
     user.hashed_password = hash_password(password)
@@ -4237,6 +4396,8 @@ def reset_password(payload: ResetPasswordRequest = Body(...), db: Session = Depe
     user.password_reset_expires_at = None
     db.add(user)
     db.commit()
+
+    log_auth_event("reset_password", outcome="success", request=request, email=user.email, user_id=user.id)
 
     return {
         "status": "success",
