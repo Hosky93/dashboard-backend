@@ -502,6 +502,42 @@ def html_escape(value: Any) -> str:
         .replace("'", "&#39;")
     )
 
+def normalize_currency_symbol(symbol: Optional[str]) -> str:
+    symbol = (symbol or "").strip()
+    if symbol in {"£", "$", "€", "¥"}:
+        return symbol
+    return "£"
+
+
+def detect_currency_symbol_from_series(series: pd.Series) -> str:
+    counts = {"£": 0, "$": 0, "€": 0, "¥": 0}
+
+    for raw_value in series.dropna().astype(str):
+        for symbol in counts:
+            if symbol in raw_value:
+                counts[symbol] += 1
+
+    most_common_symbol = max(counts, key=counts.get)
+    if counts[most_common_symbol] > 0:
+        return most_common_symbol
+
+    return "£"
+
+
+def get_dashboard_currency_symbol(
+    df: pd.DataFrame,
+    amount_col: Optional[str],
+    fallback: Optional[str] = None,
+) -> str:
+    normalized_fallback = normalize_currency_symbol(fallback)
+
+    if amount_col and amount_col in df.columns:
+        detected = detect_currency_symbol_from_series(df[amount_col])
+        if detected:
+            return detected
+
+    return normalized_fallback
+
 def is_saved_view_report_enabled(saved_view: SavedView) -> bool:
     return bool(saved_view.report_enabled)
 
@@ -591,12 +627,63 @@ def send_saved_view_report_email(
     from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
     )
 
+def get_email_currency_symbol(dashboard_payload: Dict[str, Any]) -> str:
+    summary = dashboard_payload.get("summary", {}) or {}
+    return normalize_currency_symbol(summary.get("currency_symbol") or "£")
+
+
+def format_email_money(value: Any, currency_symbol: str) -> str:
+    if not isinstance(value, (int, float)):
+        return "—"
+
+    decimals = 0 if currency_symbol == "¥" else 2
+    return f"{currency_symbol}{value:,.{decimals}f}"
+
+
+def extract_email_insights(dashboard_payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    raw_smart_insights = dashboard_payload.get("smart_insights") or []
+    fallback_insights = dashboard_payload.get("insights") or []
+
+    extracted: List[Dict[str, str]] = []
+
+    if isinstance(raw_smart_insights, list) and raw_smart_insights:
+        for item in raw_smart_insights[:4]:
+            if isinstance(item, dict):
+                extracted.append(
+                    {
+                        "title": str(item.get("title") or "Insight"),
+                        "message": str(item.get("message") or ""),
+                    }
+                )
+            elif isinstance(item, str):
+                extracted.append(
+                    {
+                        "title": "Insight",
+                        "message": item,
+                    }
+                )
+
+    if extracted:
+        return extracted
+
+    for item in fallback_insights[:4]:
+        if isinstance(item, str):
+            extracted.append(
+                {
+                    "title": "Insight",
+                    "message": item,
+                }
+            )
+
+    return extracted
+
 def build_dashboard_report_email_text(
     file_name: str,
     dashboard_payload: Dict[str, Any],
 ) -> str:
     summary = dashboard_payload.get("summary", {}) or {}
     charts = dashboard_payload.get("charts", {}) or {}
+    currency_symbol = get_email_currency_symbol(dashboard_payload)
 
     total_revenue = summary.get("total_revenue")
     num_sales = summary.get("num_sales")
@@ -605,17 +692,20 @@ def build_dashboard_report_email_text(
 
     top_products = (charts.get("top_products") or [])[:5]
     top_customers = (charts.get("top_customers") or [])[:5]
-    insights = (dashboard_payload.get("insights") or [])[:5]
+    email_insights = extract_email_insights(dashboard_payload)
+
+    top_customer_name = top_customers[0].get("customer") if top_customers else "—"
 
     lines = [
         "Hello,",
         "",
-        f"Here is your Dashboard Reports summary for: {file_name}",
+        f"Here is your Easy-dash report for: {file_name}",
         "",
         "SUMMARY",
-        f"- Total revenue: £{total_revenue:,.2f}" if isinstance(total_revenue, (int, float)) else "- Total revenue: —",
+        f"- Total revenue: {format_email_money(total_revenue, currency_symbol)}",
         f"- Orders: {num_sales:,}" if isinstance(num_sales, int) else f"- Orders: {num_sales}" if num_sales is not None else "- Orders: —",
-        f"- Average order value: £{average_sale:,.2f}" if isinstance(average_sale, (int, float)) else "- Average order value: —",
+        f"- Average order value: {format_email_money(average_sale, currency_symbol)}",
+        f"- Top customer: {top_customer_name or '—'}",
         f"- Date range: {date_range.get('start', '—')} to {date_range.get('end', '—')}",
         "",
         "TOP PRODUCTS",
@@ -624,8 +714,7 @@ def build_dashboard_report_email_text(
     if top_products:
         for item in top_products:
             product_name = item.get("product") or "Unknown product"
-            revenue = item.get("revenue")
-            revenue_text = f"£{revenue:,.2f}" if isinstance(revenue, (int, float)) else "—"
+            revenue_text = format_email_money(item.get("revenue"), currency_symbol)
             lines.append(f"- {product_name}: {revenue_text}")
     else:
         lines.append("- No product data available")
@@ -638,8 +727,7 @@ def build_dashboard_report_email_text(
     if top_customers:
         for item in top_customers:
             customer_name = item.get("customer") or "Unknown customer"
-            revenue = item.get("revenue")
-            revenue_text = f"£{revenue:,.2f}" if isinstance(revenue, (int, float)) else "—"
+            revenue_text = format_email_money(item.get("revenue"), currency_symbol)
             lines.append(f"- {customer_name}: {revenue_text}")
     else:
         lines.append("- No customer data available")
@@ -649,15 +737,17 @@ def build_dashboard_report_email_text(
         "KEY INSIGHTS",
     ])
 
-    if insights:
-        for insight in insights:
-            lines.append(f"- {insight}")
+    if email_insights:
+        for insight in email_insights:
+            title = insight.get("title") or "Insight"
+            message = insight.get("message") or ""
+            lines.append(f"- {title}: {message}")
     else:
         lines.append("- No insights available")
 
     lines.extend([
         "",
-        "Generated by Easy Dash.",
+        "Generated by Easy-dash.",
     ])
 
     return "\n".join(lines)
@@ -668,6 +758,7 @@ def build_dashboard_report_email_html(
 ) -> str:
     summary = dashboard_payload.get("summary", {}) or {}
     charts = dashboard_payload.get("charts", {}) or {}
+    currency_symbol = get_email_currency_symbol(dashboard_payload)
 
     total_revenue = summary.get("total_revenue")
     num_sales = summary.get("num_sales")
@@ -676,19 +767,19 @@ def build_dashboard_report_email_html(
 
     top_products = (charts.get("top_products") or [])[:5]
     top_customers = (charts.get("top_customers") or [])[:5]
-    insights = (dashboard_payload.get("insights") or [])[:5]
+    email_insights = extract_email_insights(dashboard_payload)
 
-    revenue_text = f"£{total_revenue:,.2f}" if isinstance(total_revenue, (int, float)) else "—"
+    revenue_text = format_email_money(total_revenue, currency_symbol)
     orders_text = f"{num_sales:,}" if isinstance(num_sales, int) else str(num_sales) if num_sales is not None else "—"
-    aov_text = f"£{average_sale:,.2f}" if isinstance(average_sale, (int, float)) else "—"
+    aov_text = format_email_money(average_sale, currency_symbol)
+    top_customer_text = html_escape(top_customers[0].get("customer") if top_customers else "—")
     date_range_text = f"{date_range.get('start', '—')} to {date_range.get('end', '—')}"
 
     top_products_html = ""
     if top_products:
         for item in top_products:
             product_name = html_escape(item.get("product") or "Unknown product")
-            revenue = item.get("revenue")
-            revenue_value = f"£{revenue:,.2f}" if isinstance(revenue, (int, float)) else "—"
+            revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
             top_products_html += f"""
                 <tr>
                     <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#e5e7eb;font-size:14px;">{product_name}</td>
@@ -706,8 +797,7 @@ def build_dashboard_report_email_html(
     if top_customers:
         for item in top_customers:
             customer_name = html_escape(item.get("customer") or "Unknown customer")
-            revenue = item.get("revenue")
-            revenue_value = f"£{revenue:,.2f}" if isinstance(revenue, (int, float)) else "—"
+            revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
             top_customers_html += f"""
                 <tr>
                     <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#e5e7eb;font-size:14px;">{customer_name}</td>
@@ -721,16 +811,33 @@ def build_dashboard_report_email_html(
             </tr>
         """
 
-    insights_html = ""
-    if insights:
-        for insight in insights:
-            insights_html += f"""
-                <div style="margin-bottom:12px;padding:14px 16px;border:1px solid #1f2937;border-radius:14px;background:#0f172a;color:#e5e7eb;font-size:14px;line-height:1.6;">
-                    {html_escape(insight)}
-                </div>
-            """
+    primary_insight_html = ""
+    secondary_insights_html = ""
+
+    if email_insights:
+        top_insight = email_insights[0]
+        primary_insight_html = f"""
+            <div style="margin-bottom:16px;padding:18px;border:1px solid rgba(245,158,11,0.22);border-radius:18px;background:rgba(245,158,11,0.10);">
+              <div style="margin-bottom:8px;color:#fde68a;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Top insight</div>
+              <div style="margin-bottom:8px;color:#ffffff;font-size:18px;font-weight:700;">{html_escape(top_insight.get("title") or "Insight")}</div>
+              <div style="color:#f8fafc;font-size:14px;line-height:1.7;">{html_escape(top_insight.get("message") or "")}</div>
+            </div>
+        """
+
+        if len(email_insights) > 1:
+            for insight in email_insights[1:4]:
+                secondary_insights_html += f"""
+                    <div style="margin-bottom:12px;padding:14px 16px;border:1px solid #1f2937;border-radius:14px;background:#0f172a;color:#e5e7eb;">
+                        <div style="margin-bottom:6px;color:#cbd5e1;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
+                            {html_escape(insight.get("title") or "Insight")}
+                        </div>
+                        <div style="font-size:14px;line-height:1.6;">
+                            {html_escape(insight.get("message") or "")}
+                        </div>
+                    </div>
+                """
     else:
-        insights_html = """
+        primary_insight_html = """
             <div style="padding:14px 16px;border:1px solid #1f2937;border-radius:14px;background:#0f172a;color:#94a3b8;font-size:14px;">
                 No insights available
             </div>
@@ -746,14 +853,13 @@ def build_dashboard_report_email_html(
 </head>
 <body style="margin:0;padding:0;background:#020617;font-family:Arial,Helvetica,sans-serif;">
   <div style="margin:0;padding:32px 16px;background:#020617;">
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:760px;margin:0 auto;border-collapse:collapse;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:820px;margin:0 auto;border-collapse:collapse;">
       <tr>
         <td style="padding:0;">
           <div style="border:1px solid #1e293b;border-radius:24px;overflow:hidden;background:linear-gradient(135deg,#0f172a 0%,#020617 100%);box-shadow:0 0 30px rgba(0,0,0,0.35);">
-            
             <div style="padding:28px 28px 20px 28px;border-bottom:1px solid #1e293b;">
               <div style="display:inline-block;padding:6px 12px;border-radius:999px;background:#10b9811a;border:1px solid #10b98133;color:#a7f3d0;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                Dashboard Reports
+                Easy-dash
               </div>
               <h1 style="margin:16px 0 8px 0;color:#ffffff;font-size:28px;line-height:1.2;font-weight:700;">
                 Your dashboard report
@@ -761,31 +867,29 @@ def build_dashboard_report_email_html(
               <p style="margin:0;color:#94a3b8;font-size:15px;line-height:1.6;">
                 {html_escape(file_name)}
               </p>
+              <p style="margin:10px 0 0 0;color:#94a3b8;font-size:13px;">
+                Date range: {html_escape(date_range_text)}
+              </p>
             </div>
 
             <div style="padding:24px 28px;">
-              <div style="margin-bottom:22px;padding:18px 20px;border:1px solid #1e293b;border-radius:18px;background:#081225;">
-                <p style="margin:0 0 8px 0;color:#cbd5e1;font-size:14px;line-height:1.7;">
-                  Here is your latest dashboard summary, styled for inbox reading.
-                </p>
-                <p style="margin:0;color:#94a3b8;font-size:13px;">
-                  Date range: {html_escape(date_range_text)}
-                </p>
-              </div>
-
               <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:22px;border-collapse:separate;border-spacing:12px 12px;">
                 <tr>
-                  <td width="33.33%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
+                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
                     <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Total revenue</div>
-                    <div style="color:#ffffff;font-size:28px;font-weight:700;">{revenue_text}</div>
+                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(revenue_text)}</div>
                   </td>
-                  <td width="33.33%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
+                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
                     <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Orders</div>
-                    <div style="color:#ffffff;font-size:28px;font-weight:700;">{orders_text}</div>
+                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(orders_text)}</div>
                   </td>
-                  <td width="33.33%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
+                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
                     <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Average order value</div>
-                    <div style="color:#ffffff;font-size:28px;font-weight:700;">{aov_text}</div>
+                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(aov_text)}</div>
+                  </td>
+                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
+                    <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Top customer</div>
+                    <div style="color:#ffffff;font-size:20px;font-weight:700;">{top_customer_text}</div>
                   </td>
                 </tr>
               </table>
@@ -820,13 +924,14 @@ def build_dashboard_report_email_html(
               <div style="border:1px solid #1e293b;border-radius:20px;background:#0b1220;padding:20px;">
                 <h2 style="margin:0 0 8px 0;color:#ffffff;font-size:20px;">Key insights</h2>
                 <p style="margin:0 0 18px 0;color:#94a3b8;font-size:13px;">Smart takeaways from your latest dashboard data</p>
-                {insights_html}
+                {primary_insight_html}
+                {secondary_insights_html}
               </div>
             </div>
 
             <div style="padding:18px 28px;border-top:1px solid #1e293b;background:#07101f;">
               <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.6;">
-                Generated by Dashboard Reports.
+                Generated by Easy-dash.
               </p>
             </div>
           </div>
@@ -1461,6 +1566,7 @@ async def upload_file(
                 "product": existing_saved_mapping.product_col,
                 "customer": existing_saved_mapping.customer_col,
                 "date_parse_mode": existing_saved_mapping.date_parse_mode,
+                "currency_symbol": "£",
             }
     except Exception:
         logger.exception("Failed to look up saved mapping for upload.")
@@ -1490,16 +1596,23 @@ async def upload_file(
                 valid_dates.max(),
             )
 
+    resolved_amount_col = (saved_mapping or {}).get("amount") or (detected.get("amount") or {}).get("column")
+    resolved_currency_symbol = get_dashboard_currency_symbol(
+        df_clean,
+        resolved_amount_col,
+        (saved_mapping or {}).get("currency_symbol"),
+    )
+
     mapping = {
         "date": detected_date_col,
-        "amount": (saved_mapping or {}).get("amount") or (detected.get("amount") or {}).get("column"),
+        "amount": resolved_amount_col,
         "product": (saved_mapping or {}).get("product") or (detected.get("product") or {}).get("column"),
         "customer": (saved_mapping or {}).get("customer") or (detected.get("customer") or {}).get("column"),
         "filter_start_date": "",
         "filter_end_date": "",
         "filter_product": "",
         "filter_customer": "",
-        "currency_symbol": "£",
+        "currency_symbol": resolved_currency_symbol,
         "time_grouping": adaptive_time_grouping,
         "date_parse_mode": chosen_date_parse_mode,
         "detection_confidence": detection.get("overall_confidence", 0.0),
@@ -1519,7 +1632,7 @@ async def upload_file(
         df_clean,
         mapping,
         extra_dimension_col=None,
-        currency_symbol="£",
+        currency_symbol=resolved_currency_symbol,
         time_grouping=adaptive_time_grouping,
     )
 
@@ -1708,6 +1821,12 @@ async def reanalyze_saved_dashboard(
     if adaptive_start and adaptive_end:
         effective_time_grouping = get_adaptive_time_grouping(adaptive_start, adaptive_end)
 
+    resolved_currency_symbol = get_dashboard_currency_symbol(
+        df_clean,
+        amount_col,
+        saved_mapping.get("currency_symbol"),
+    )
+
     mapping = {
         "date": date_col or None,
         "amount": amount_col or None,
@@ -1717,7 +1836,7 @@ async def reanalyze_saved_dashboard(
         "filter_end_date": filter_end_date,
         "filter_product": parsed_filter_product,
         "filter_customer": parsed_filter_customer,
-        "currency_symbol": "£",
+        "currency_symbol": resolved_currency_symbol,
         "time_grouping": effective_time_grouping,
         "date_parse_mode": chosen_date_parse_mode,
         "comparison_enabled": comparison_enabled,
@@ -1743,7 +1862,7 @@ async def reanalyze_saved_dashboard(
         df_clean,
         mapping,
         extra_dimension_col=None,
-        currency_symbol="£",
+        currency_symbol=resolved_currency_symbol,
         time_grouping=effective_time_grouping,
     )
 
@@ -1780,6 +1899,7 @@ async def reanalyze_saved_dashboard(
             "product": product_col or None,
             "customer": customer_col or None,
             "date_parse_mode": chosen_date_parse_mode,
+            "currency_symbol": resolved_currency_symbol,
         },
         "filters_used": {
             "start_date": filter_start_date,
@@ -2749,16 +2869,23 @@ async def analyze_with_mapping(
     if adaptive_start and adaptive_end:
         effective_time_grouping = get_adaptive_time_grouping(adaptive_start, adaptive_end)
 
+    resolved_amount_col = amount_col or None
+    resolved_currency_symbol = get_dashboard_currency_symbol(
+        df_clean,
+        resolved_amount_col,
+        "£",
+    )
+
     mapping = {
         "date": date_col or None,
-        "amount": amount_col or None,
+        "amount": resolved_amount_col,
         "product": product_col or None,
         "customer": customer_col or None,
         "filter_start_date": effective_filter_start_date,
         "filter_end_date": effective_filter_end_date,
         "filter_product": parsed_filter_product,
         "filter_customer": parsed_filter_customer,
-        "currency_symbol": "£",
+        "currency_symbol": resolved_currency_symbol,
         "time_grouping": effective_time_grouping,
         "date_parse_mode": chosen_date_parse_mode,
         "comparison_enabled": comparison_is_enabled,
@@ -2784,7 +2911,7 @@ async def analyze_with_mapping(
         df_clean,
         mapping,
         extra_dimension_col=None,
-        currency_symbol="£",
+        currency_symbol=resolved_currency_symbol,
         time_grouping=effective_time_grouping,
     )
 
@@ -2840,10 +2967,11 @@ async def analyze_with_mapping(
     "overall_confidence": stored.get("overall_confidence", 0.0),
     "mapping_used": {
         "date": date_col or None,
-        "amount": amount_col or None,
+        "amount": resolved_amount_col,
         "product": product_col or None,
         "customer": customer_col or None,
         "date_parse_mode": chosen_date_parse_mode,
+        "currency_symbol": resolved_currency_symbol,
     },
     "filters_used": {
         "start_date": effective_filter_start_date,
@@ -3957,6 +4085,18 @@ def analyze_sales(
                     suggested_action="Review pricing, bundling, and upsell opportunities to lift value per order.",
                 )
 
+    selected_products = mapping.get("filter_product") or []
+    selected_customers = mapping.get("filter_customer") or []
+    is_filtered_view = bool(
+        (mapping.get("filter_start_date") or "").strip()
+        or (mapping.get("filter_end_date") or "").strip()
+        or selected_products
+        or selected_customers
+    )
+
+    def scoped_message(default_message: str, filtered_message: str) -> str:
+        return filtered_message if is_filtered_view else default_message
+
     # --- 2. Product concentration / standout performance ---
     top_products = charts.get("top_products", []) or []
     if top_products:
@@ -3967,7 +4107,10 @@ def analyze_sales(
         if top_product_share >= 40:
             add_smart_insight(
                 title="Product concentration risk",
-                message=f"{top_product_name} generates {top_product_share:.1f}% of revenue, indicating strong product concentration risk.",
+                message=scoped_message(
+                    f"{top_product_name} generates {top_product_share:.1f}% of revenue, indicating strong product concentration risk.",
+                    f"Within this filtered view, {top_product_name} generates {top_product_share:.1f}% of revenue.",
+                ),
                 severity="warning",
                 priority=90,
                 category="concentration",
@@ -3977,7 +4120,10 @@ def analyze_sales(
         elif top_product_share >= 25:
             add_smart_insight(
                 title="Leading product",
-                message=f"{top_product_name} is your strongest product, contributing {top_product_share:.1f}% of revenue.",
+                message=scoped_message(
+                f"{top_product_name} is your strongest product, contributing {top_product_share:.1f}% of revenue.",
+                f"Within this filtered view, {top_product_name} contributes {top_product_share:.1f}% of revenue.",
+            ),
                 severity="positive",
                 priority=68,
                 category="highlight",
@@ -3990,7 +4136,10 @@ def analyze_sales(
             if top_product_share - second_product_share >= 15:
                 add_smart_insight(
                     title="Clear revenue driver",
-                    message=f"{top_product_name} is materially ahead of the next best product, making it your clearest revenue driver.",
+                    message=scoped_message(
+                        f"{top_product_name} is materially ahead of the next best product, making it your clearest revenue driver.",
+                        f"Within this filtered view, {top_product_name} is materially ahead of the next best product.",
+                    ),
                     severity="info",
                     priority=64,
                     category="highlight",
@@ -4008,7 +4157,10 @@ def analyze_sales(
         if top_customer_share >= 50:
             add_smart_insight(
                 title="Customer concentration risk",
-                message=f"{top_customer_name} accounts for {top_customer_share:.1f}% of revenue, creating significant customer concentration risk.",
+                message=scoped_message(
+                    f"{top_customer_name} accounts for {top_customer_share:.1f}% of revenue, creating significant customer concentration risk.",
+                    f"Within this filtered view, {top_customer_name} accounts for {top_customer_share:.1f}% of revenue.",
+                ),
                 severity="warning",
                 priority=92,
                 category="concentration",
@@ -4018,7 +4170,10 @@ def analyze_sales(
         elif top_customer_share >= 30:
             add_smart_insight(
                 title="Largest customer",
-                message=f"{top_customer_name} is your most important customer, contributing {top_customer_share:.1f}% of total revenue.",
+                message=scoped_message(
+                    f"{top_customer_name} is your most important customer, contributing {top_customer_share:.1f}% of total revenue.",
+                    f"Within this filtered view, {top_customer_name} contributes {top_customer_share:.1f}% of total revenue.",
+                ),
                 severity="info",
                 priority=70,
                 category="highlight",
@@ -4948,16 +5103,23 @@ async def dashboard_generate(
                 parsed_dates.max(),
             )
 
+    resolved_amount_col = amount_col or detected_amount
+    resolved_currency_symbol = get_dashboard_currency_symbol(
+        df_for_analysis,
+        resolved_amount_col,
+        currency_symbol,
+    )
+
     mapping = {
         "date": resolved_date_col,
-        "amount": amount_col or detected_amount,
+        "amount": resolved_amount_col,
         "product": product_col or (results.get("product") or {}).get("column"),
         "customer": customer_col or (results.get("customer") or {}).get("column"),
         "filter_start_date": filter_start_date or "",
         "filter_end_date": filter_end_date or "",
         "filter_product": filter_product.split("|") if filter_product else [],
         "filter_customer": filter_customer.split("|") if filter_customer else [],
-        "currency_symbol": currency_symbol,
+        "currency_symbol": resolved_currency_symbol,
         "time_grouping": effective_time_grouping,
         "date_parse_mode": chosen_date_parse_mode,
         "detection_confidence": detection.get("overall_confidence", 0.0),
@@ -4992,7 +5154,7 @@ async def dashboard_generate(
         df_for_analysis,
         mapping,
         extra_dimension_col=extra_dimension_col,
-        currency_symbol=currency_symbol or "£",
+        currency_symbol=resolved_currency_symbol,
         time_grouping=effective_time_grouping,
     )
 
