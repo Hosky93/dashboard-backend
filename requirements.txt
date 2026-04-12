@@ -54,3 +54,4 @@ urllib3==2.6.3
 uvicorn==0.42.0
 yarl==1.22.0
 svix
+weasyprint
