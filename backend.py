@@ -5497,6 +5497,180 @@ def build_safe_pdf_filename(file_name: Optional[str]) -> str:
     return base_name
 
 
+def build_dashboard_pdf_fallback_bytes(
+    file_name: str,
+    dashboard_payload: Dict[str, Any],
+) -> bytes:
+    """
+    Fallback PDF generator using ReportLab.
+    This avoids total PDF export failure if WeasyPrint is unavailable
+    or broken in the deployment environment.
+    """
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    page_width, page_height = A4
+
+    summary = dashboard_payload.get("summary", {}) or {}
+    charts = dashboard_payload.get("charts", {}) or {}
+    date_range = summary.get("date_range", {}) or {}
+
+    currency_symbol = get_email_currency_symbol(dashboard_payload)
+
+    total_revenue = format_email_money(summary.get("total_revenue"), currency_symbol)
+    average_sale = format_email_money(summary.get("average_sale"), currency_symbol)
+
+    num_sales_value = summary.get("num_sales")
+    if isinstance(num_sales_value, int):
+        orders_text = f"{num_sales_value:,}"
+    elif num_sales_value is not None:
+        orders_text = str(num_sales_value)
+    else:
+        orders_text = "—"
+
+    top_products = (charts.get("top_products") or [])[:5]
+    top_customers = (charts.get("top_customers") or [])[:5]
+    insights = extract_email_insights(dashboard_payload)[:4]
+
+    y = page_height - 50
+
+    def new_page() -> None:
+        nonlocal y
+        pdf.showPage()
+        y = page_height - 50
+
+    def ensure_space(height_needed: int) -> None:
+        nonlocal y
+        if y - height_needed < 50:
+            new_page()
+
+    def draw_label_value(label: str, value: str) -> None:
+        nonlocal y
+        ensure_space(28)
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+        pdf.drawString(50, y, label)
+        pdf.setFont("Helvetica", 11)
+        pdf.drawString(190, y, value)
+        y -= 22
+
+    pdf.setTitle("Dashboard Report")
+
+    pdf.setFont("Helvetica-Bold", 20)
+    pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+    pdf.drawString(50, y, "Easy-dash Dashboard Report")
+    y -= 28
+
+    pdf.setFont("Helvetica", 11)
+    pdf.setFillColor(colors.HexColor(TEXT_SECONDARY))
+    pdf.drawString(50, y, f"File: {file_name}")
+    y -= 18
+    pdf.drawString(
+        50,
+        y,
+        f"Date range: {date_range.get('start', '—')} to {date_range.get('end', '—')}",
+    )
+    y -= 28
+
+    pdf.setStrokeColor(colors.HexColor("#D1D5DB"))
+    pdf.line(50, y, page_width - 50, y)
+    y -= 28
+
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+    pdf.drawString(50, y, "Summary")
+    y -= 24
+
+    draw_label_value("Total revenue", total_revenue)
+    draw_label_value("Orders", orders_text)
+    draw_label_value("Average order value", average_sale)
+
+    top_customer_name = "—"
+    if top_customers:
+        top_customer_name = str(top_customers[0].get("customer") or "—")
+    draw_label_value("Top customer", top_customer_name)
+
+    y -= 10
+
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+    pdf.drawString(50, y, "Top products")
+    y -= 22
+
+    if top_products:
+        for item in top_products:
+            ensure_space(20)
+            product_name = str(item.get("product") or "Unknown product")
+            revenue_text = format_email_money(item.get("revenue"), currency_symbol)
+            pdf.setFont("Helvetica", 10)
+            pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+            pdf.drawString(60, y, f"• {product_name}")
+            pdf.drawRightString(page_width - 60, y, revenue_text)
+            y -= 18
+    else:
+        ensure_space(20)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(60, y, "No product data available")
+        y -= 18
+
+    y -= 10
+
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+    pdf.drawString(50, y, "Top customers")
+    y -= 22
+
+    if top_customers:
+        for item in top_customers:
+            ensure_space(20)
+            customer_name = str(item.get("customer") or "Unknown customer")
+            revenue_text = format_email_money(item.get("revenue"), currency_symbol)
+            pdf.setFont("Helvetica", 10)
+            pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+            pdf.drawString(60, y, f"• {customer_name}")
+            pdf.drawRightString(page_width - 60, y, revenue_text)
+            y -= 18
+    else:
+        ensure_space(20)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(60, y, "No customer data available")
+        y -= 18
+
+    y -= 10
+
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.setFillColor(colors.HexColor(TEXT_PRIMARY))
+    pdf.drawString(50, y, "Key insights")
+    y -= 22
+
+    if insights:
+        for insight in insights:
+            ensure_space(50)
+            title = str(insight.get("title") or "Insight")
+            message = str(insight.get("message") or "")
+            wrapped_lines = textwrap.wrap(message, width=90) or [""]
+
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.drawString(60, y, f"• {title}")
+            y -= 16
+
+            pdf.setFont("Helvetica", 10)
+            for line in wrapped_lines:
+                ensure_space(16)
+                pdf.drawString(74, y, line)
+                y -= 14
+
+            y -= 6
+    else:
+        ensure_space(20)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(60, y, "No insights available")
+        y -= 18
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 
 
 @app.get("/dashboard/{dashboard_id}/pdf")
@@ -5526,6 +5700,8 @@ def download_dashboard_pdf(
         )
         raise HTTPException(status_code=500, detail="Saved dashboard data is invalid.")
 
+    safe_filename = build_safe_pdf_filename(dashboard.file_name)
+
     try:
         html_content = build_dashboard_report_email_html(
             file_name=dashboard.file_name,
@@ -5535,40 +5711,59 @@ def download_dashboard_pdf(
         pdf_bytes = HTML(string=html_content).write_pdf()
 
         if not pdf_bytes:
-            logger.error(
-                "Empty PDF generated for dashboard_id=%s user_id=%s",
+            raise ValueError("WeasyPrint returned empty PDF bytes")
+
+        logger.info(
+            "PDF generated with WeasyPrint for dashboard_id=%s user_id=%s filename=%s bytes=%s",
+            dashboard_id,
+            current_user.id,
+            safe_filename,
+            len(pdf_bytes),
+        )
+    except Exception:
+        logger.exception(
+            "WeasyPrint PDF generation failed for dashboard_id=%s user_id=%s. Falling back to ReportLab.",
+            dashboard_id,
+            current_user.id,
+        )
+
+        try:
+            pdf_bytes = build_dashboard_pdf_fallback_bytes(
+                file_name=dashboard.file_name,
+                dashboard_payload=dashboard_payload,
+            )
+        except Exception:
+            logger.exception(
+                "ReportLab fallback PDF generation also failed for dashboard_id=%s user_id=%s",
                 dashboard_id,
                 current_user.id,
             )
             raise HTTPException(status_code=500, detail="Failed to generate PDF.")
 
-        safe_filename = build_safe_pdf_filename(dashboard.file_name)
+        if not pdf_bytes:
+            logger.error(
+                "Fallback PDF generation returned empty bytes for dashboard_id=%s user_id=%s",
+                dashboard_id,
+                current_user.id,
+            )
+            raise HTTPException(status_code=500, detail="Failed to generate PDF.")
 
         logger.info(
-            "PDF generated successfully for dashboard_id=%s user_id=%s filename=%s bytes=%s",
+            "PDF generated with ReportLab fallback for dashboard_id=%s user_id=%s filename=%s bytes=%s",
             dashboard_id,
             current_user.id,
             safe_filename,
             len(pdf_bytes),
         )
 
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{safe_filename}"',
-                "Content-Length": str(len(pdf_bytes)),
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Access-Control-Expose-Headers": "Content-Disposition, Content-Length, Content-Type",
-            },
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(
-            "Failed generating PDF for dashboard_id=%s user_id=%s",
-            dashboard_id,
-            current_user.id,
-        )
-        raise HTTPException(status_code=500, detail="Failed to generate PDF.")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Access-Control-Expose-Headers": "Content-Disposition, Content-Length, Content-Type",
+        },
+    )
