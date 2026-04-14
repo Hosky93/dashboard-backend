@@ -770,7 +770,11 @@ def build_dashboard_report_email_html(
     top_customers = (charts.get("top_customers") or [])[:5]
     email_insights = extract_email_insights(dashboard_payload)
 
-    revenue_over_time = (charts.get("revenue_over_time") or {}) if isinstance(charts.get("revenue_over_time"), dict) else {}
+    revenue_over_time = (
+        charts.get("revenue_over_time") or {}
+        if isinstance(charts.get("revenue_over_time"), dict)
+        else {}
+    )
     revenue_points = revenue_over_time.get("points") or []
     revenue_grouping = str(revenue_over_time.get("grouping") or "period").strip().lower()
 
@@ -824,7 +828,7 @@ def build_dashboard_report_email_html(
 
     insights_html = ""
     if email_insights:
-        for index, insight in enumerate(email_insights):
+        for index, insight in enumerate(email_insights[:3]):
             title = html_escape(insight.get("title") or "Insight")
             message = html_escape(insight.get("message") or "")
             modifier_class = " insight-primary" if index == 0 else ""
@@ -841,20 +845,36 @@ def build_dashboard_report_email_html(
             </div>
         """
 
-    def _short_period_label(value: Any) -> str:
+    def _short_period_label(value: Any, grouping: str) -> str:
         text = str(value or "").strip()
         if not text:
             return "—"
-        if len(text) <= 10:
-            return text
-        return text[-10:]
+
+        if grouping == "day":
+            try:
+                dt = datetime.fromisoformat(text)
+                return dt.strftime("%b %d")
+            except Exception:
+                return text[-5:] if len(text) > 5 else text
+
+        if grouping == "week":
+            return text.replace("2024-", "")[-7:]
+
+        if grouping == "month":
+            try:
+                dt = datetime.fromisoformat(f"{text}-01")
+                return dt.strftime("%b")
+            except Exception:
+                return text[-7:] if len(text) > 7 else text
+
+        return text[-8:] if len(text) > 8 else text
 
     chart_panel_html = """
         <div class="empty-chart-state">No revenue trend data available</div>
     """
 
     if isinstance(revenue_points, list) and revenue_points:
-        trimmed_points = revenue_points[-8:]
+        trimmed_points = revenue_points[-7:]
 
         values: List[float] = []
         labels: List[str] = []
@@ -862,56 +882,92 @@ def build_dashboard_report_email_html(
         for item in trimmed_points:
             if not isinstance(item, dict):
                 continue
+
             revenue_value = item.get("revenue")
             try:
                 numeric_value = float(revenue_value or 0)
             except Exception:
                 numeric_value = 0.0
+
             values.append(max(numeric_value, 0.0))
-            labels.append(_short_period_label(item.get("period")))
+            labels.append(_short_period_label(item.get("period"), revenue_grouping))
 
         if values:
             chart_width = 520
-            chart_height = 180
-            left_pad = 22
-            right_pad = 14
+            chart_height = 170
+            left_pad = 18
+            right_pad = 16
             top_pad = 16
-            bottom_pad = 42
+            bottom_pad = 34
 
             plot_width = chart_width - left_pad - right_pad
             plot_height = chart_height - top_pad - bottom_pad
-
             max_value = max(values) or 1.0
-            count = len(values)
-            gap = 10
-            bar_width = max(18, int((plot_width - (gap * (count - 1))) / max(count, 1)))
 
-            bars_svg = ""
-            labels_svg = ""
+            if len(values) == 1:
+                x_positions = [left_pad + (plot_width / 2)]
+            else:
+                step_x = plot_width / (len(values) - 1)
+                x_positions = [left_pad + (idx * step_x) for idx in range(len(values))]
 
-            for idx, value in enumerate(values):
-                bar_height = 0 if max_value == 0 else (value / max_value) * plot_height
-                x = left_pad + idx * (bar_width + gap)
-                y = top_pad + (plot_height - bar_height)
-                label_x = x + (bar_width / 2)
+            y_positions = [
+                top_pad + (plot_height - ((value / max_value) * plot_height))
+                for value in values
+            ]
 
-                bars_svg += f'''
-                    <rect x="{x:.1f}" y="{y:.1f}" width="{bar_width}" height="{bar_height:.1f}"
-                          rx="6" ry="6" fill="#10B981" fill-opacity="0.90" />
+            polyline_points = " ".join(
+                f"{x:.1f},{y:.1f}" for x, y in zip(x_positions, y_positions)
+            )
+
+            area_points = f"{left_pad:.1f},{top_pad + plot_height:.1f} " + polyline_points + f" {x_positions[-1]:.1f},{top_pad + plot_height:.1f}"
+
+            vertical_guides = ""
+            for x in x_positions:
+                vertical_guides += f'''
+                    <line x1="{x:.1f}" y1="{top_pad}" x2="{x:.1f}" y2="{top_pad + plot_height}"
+                          stroke="#0F172A" stroke-width="1" opacity="0.35" />
                 '''
 
-                labels_svg += f'''
-                    <text x="{label_x:.1f}" y="{chart_height - 16}" text-anchor="middle"
-                          font-size="10" fill="#94A3B8">{html_escape(labels[idx])}</text>
+            horizontal_guides = ""
+            for step in range(3):
+                y = top_pad + (plot_height * step / 2)
+                horizontal_guides += f'''
+                    <line x1="{left_pad}" y1="{y:.1f}" x2="{chart_width - right_pad}" y2="{y:.1f}"
+                          stroke="#1E293B" stroke-width="1" opacity="0.55" />
                 '''
+
+            point_markers = ""
+            label_marks = ""
+            for idx, (x, y) in enumerate(zip(x_positions, y_positions)):
+                point_markers += f'''
+                    <circle cx="{x:.1f}" cy="{y:.1f}" r="3.6" fill="#10B981" stroke="#062B21" stroke-width="2" />
+                '''
+                label_marks += f'''
+                    <text x="{x:.1f}" y="{chart_height - 12}" text-anchor="middle"
+                          font-size="9.5" fill="#94A3B8">{html_escape(labels[idx])}</text>
+                '''
+
+            latest_value_text = html_escape(format_email_money(values[-1], currency_symbol))
 
             chart_panel_html = f"""
+                <div class="chart-summary-row">
+                  <div class="chart-summary-label">Latest</div>
+                  <div class="chart-summary-value">{latest_value_text}</div>
+                </div>
                 <div class="chart-wrap">
                   <svg viewBox="0 0 {chart_width} {chart_height}" class="trend-chart" role="img" aria-label="Revenue trend chart">
-                    <line x1="{left_pad}" y1="{top_pad + plot_height}" x2="{chart_width - right_pad}" y2="{top_pad + plot_height}"
-                          stroke="#1E293B" stroke-width="1" />
-                    {bars_svg}
-                    {labels_svg}
+                    {horizontal_guides}
+                    {vertical_guides}
+                    <polygon points="{area_points}" fill="url(#trendFill)" opacity="0.32"></polygon>
+                    <polyline points="{polyline_points}" fill="none" stroke="#10B981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    {point_markers}
+                    {label_marks}
+                    <defs>
+                      <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#10B981" stop-opacity="0.50"></stop>
+                        <stop offset="100%" stop-color="#10B981" stop-opacity="0.04"></stop>
+                      </linearGradient>
+                    </defs>
                   </svg>
                 </div>
             """
@@ -1055,7 +1111,7 @@ def build_dashboard_report_email_html(
     }}
 
     .panel-head {{
-      padding: 13px 14px 10px 14px;
+      padding: 12px 14px 9px 14px;
       border-bottom: 1px solid #1e293b;
       background: #0f172a;
     }}
@@ -1165,7 +1221,7 @@ def build_dashboard_report_email_html(
     }}
 
     .insights-body {{
-      padding: 10px;
+      padding: 8px;
     }}
 
     .insight-card {{
@@ -1214,22 +1270,50 @@ def build_dashboard_report_email_html(
     }}
 
     .chart-body {{
-      padding: 10px 12px 8px 12px;
+      padding: 8px 10px 8px 10px;
+    }}
+
+    .chart-summary-row {{
+      display: table;
+      width: 100%;
+      margin-bottom: 6px;
+      padding: 0 2px;
+    }}
+
+    .chart-summary-label {{
+      display: table-cell;
+      color: #94a3b8;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }}
+
+    .chart-summary-value {{
+      display: table-cell;
+      text-align: right;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
     }}
 
     .chart-wrap {{
       width: 100%;
-      height: 190px;
+      height: 166px;
+      border: 1px solid #162133;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.70) 0%, rgba(2, 6, 23, 0.95) 100%);
+      padding: 4px;
     }}
 
     .trend-chart {{
       width: 100%;
-      height: 190px;
+      height: 156px;
       display: block;
     }}
 
     .empty-chart-state {{
-      padding: 70px 10px;
+      padding: 58px 10px;
       text-align: center;
       color: #94a3b8;
       font-size: 11px;
@@ -1238,7 +1322,7 @@ def build_dashboard_report_email_html(
 
     .footer-inline {{
       margin-top: 6px;
-      padding-top: 8px;
+      padding-top: 7px;
       border-top: 1px solid #1e293b;
       color: #94a3b8;
       font-size: 10px;
@@ -1345,10 +1429,6 @@ def build_dashboard_report_email_html(
 </body>
 </html>
     """.strip()
-
-# =============================================================
-# AUTH / SECURITY
-# =============================================================
 
 # =============================================================
 # AUTH / SECURITY
