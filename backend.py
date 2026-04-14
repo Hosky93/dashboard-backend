@@ -5545,10 +5545,11 @@ def download_dashboard_pdf(
         safe_filename = build_safe_pdf_filename(dashboard.file_name)
 
         logger.info(
-            "PDF generated successfully for dashboard_id=%s user_id=%s filename=%s",
+            "PDF generated successfully for dashboard_id=%s user_id=%s filename=%s bytes=%s",
             dashboard_id,
             current_user.id,
             safe_filename,
+            len(pdf_bytes),
         )
 
         return Response(
@@ -5556,8 +5557,10 @@ def download_dashboard_pdf(
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_filename}"',
+                "Content-Length": str(len(pdf_bytes)),
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
+                "Access-Control-Expose-Headers": "Content-Disposition, Content-Length, Content-Type",
             },
         )
     except HTTPException:
