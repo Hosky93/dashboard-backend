@@ -842,7 +842,7 @@ def build_dashboard_report_email_html(
   <style>
     @page {{
       size: A4;
-      margin: 14mm;
+      margin: 9mm;
     }}
 
     * {{
@@ -852,8 +852,8 @@ def build_dashboard_report_email_html(
     body {{
       margin: 0;
       padding: 0;
-      background: #f8fafc;
-      color: #0f172a;
+      background: #020617;
+      color: #e5e7eb;
       font-family: Arial, Helvetica, sans-serif;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
@@ -864,80 +864,81 @@ def build_dashboard_report_email_html(
     }}
 
     .shell {{
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
-      border-radius: 20px;
+      background: linear-gradient(180deg, #0b1120 0%, #020617 100%);
+      border: 1px solid #1e293b;
+      border-radius: 18px;
       overflow: hidden;
     }}
 
     .hero {{
-      background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
-      padding: 22px 24px 18px 24px;
+      background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+      padding: 18px 20px 14px 20px;
+      border-bottom: 1px solid #1e293b;
     }}
 
     .badge {{
       display: inline-block;
-      padding: 6px 10px;
+      padding: 5px 9px;
       border-radius: 999px;
       background: rgba(16, 185, 129, 0.10);
       border: 1px solid rgba(16, 185, 129, 0.30);
       color: #a7f3d0;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
 
     .hero h1 {{
-      margin: 14px 0 8px 0;
+      margin: 12px 0 6px 0;
       color: #ffffff;
-      font-size: 28px;
-      line-height: 1.15;
+      font-size: 24px;
+      line-height: 1.1;
       font-weight: 700;
     }}
 
     .hero .subtle {{
       margin: 0;
-      color: #cbd5e1;
-      font-size: 14px;
-      line-height: 1.5;
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.35;
     }}
 
     .content {{
-      padding: 22px;
+      padding: 16px;
     }}
 
     .stats-grid {{
       width: 100%;
       border-collapse: separate;
-      border-spacing: 10px;
+      border-spacing: 8px;
       table-layout: fixed;
-      margin-bottom: 18px;
+      margin-bottom: 14px;
     }}
 
     .stats-grid td {{
       vertical-align: top;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 16px;
-      padding: 14px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      padding: 12px;
     }}
 
     .stat-label {{
-      color: #64748b;
-      font-size: 11px;
+      color: #94a3b8;
+      font-size: 10px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      margin-bottom: 8px;
-      line-height: 1.3;
+      margin-bottom: 6px;
+      line-height: 1.2;
     }}
 
     .stat-value {{
-      color: #0f172a;
-      font-size: 24px;
+      color: #ffffff;
+      font-size: 19px;
       font-weight: 700;
-      line-height: 1.15;
+      line-height: 1.08;
       word-break: break-word;
     }}
 
@@ -945,7 +946,7 @@ def build_dashboard_report_email_html(
       width: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      margin-bottom: 18px;
+      margin-bottom: 14px;
     }}
 
     .two-col td {{
@@ -954,119 +955,119 @@ def build_dashboard_report_email_html(
     }}
 
     .col-left {{
-      padding-right: 8px;
+      padding-right: 6px;
     }}
 
     .col-right {{
-      padding-left: 8px;
+      padding-left: 6px;
     }}
 
     .panel {{
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
-      border-radius: 18px;
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
       overflow: hidden;
       page-break-inside: avoid;
     }}
 
     .panel-head {{
-      padding: 16px 18px 12px 18px;
-      border-bottom: 1px solid #e2e8f0;
-      background: #f8fafc;
+      padding: 13px 14px 10px 14px;
+      border-bottom: 1px solid #1e293b;
+      background: #0f172a;
     }}
 
     .panel-title {{
       margin: 0;
-      color: #0f172a;
-      font-size: 18px;
+      color: #ffffff;
+      font-size: 16px;
       font-weight: 700;
-      line-height: 1.2;
+      line-height: 1.15;
     }}
 
     .panel-subtitle {{
-      margin: 6px 0 0 0;
-      color: #64748b;
-      font-size: 12px;
-      line-height: 1.45;
+      margin: 4px 0 0 0;
+      color: #94a3b8;
+      font-size: 11px;
+      line-height: 1.3;
     }}
 
     .table-wrap {{
-      padding: 8px 12px 12px 12px;
+      padding: 6px 10px 10px 10px;
     }}
 
     table.data-table {{
       width: 100%;
       border-collapse: separate;
-      border-spacing: 0 8px;
+      border-spacing: 0 6px;
       table-layout: fixed;
     }}
 
     .data-table td {{
-      background: #ffffff;
-      font-size: 13px;
-      padding: 10px 12px;
-      border-top: 1px solid #e2e8f0;
-      border-bottom: 1px solid #e2e8f0;
+      background: #111827;
+      font-size: 12px;
+      padding: 8px 10px;
+      border-top: 1px solid #1f2937;
+      border-bottom: 1px solid #1f2937;
       vertical-align: middle;
     }}
 
     .data-table tr td:first-child {{
-      border-left: 1px solid #e2e8f0;
-      border-top-left-radius: 12px;
-      border-bottom-left-radius: 12px;
+      border-left: 1px solid #1f2937;
+      border-top-left-radius: 10px;
+      border-bottom-left-radius: 10px;
     }}
 
     .data-table tr td:last-child {{
-      border-right: 1px solid #e2e8f0;
-      border-top-right-radius: 12px;
-      border-bottom-right-radius: 12px;
+      border-right: 1px solid #1f2937;
+      border-top-right-radius: 10px;
+      border-bottom-right-radius: 10px;
     }}
 
     .rank {{
-      width: 36px;
+      width: 30px;
       text-align: center;
-      color: #64748b;
+      color: #94a3b8;
       font-weight: 700;
     }}
 
     .label-cell {{
-      color: #0f172a;
+      color: #e5e7eb;
       font-weight: 600;
       word-break: break-word;
     }}
 
     .value-cell {{
-      width: 110px;
+      width: 100px;
       text-align: right;
-      color: #0f172a;
+      color: #ffffff;
       font-weight: 700;
       white-space: nowrap;
     }}
 
     .empty-cell {{
       text-align: center;
-      color: #64748b;
-      padding: 16px 12px !important;
+      color: #94a3b8;
+      padding: 14px 10px !important;
     }}
 
     .insights-panel {{
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
-      border-radius: 18px;
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
       overflow: hidden;
       page-break-inside: avoid;
     }}
 
     .insights-body {{
-      padding: 14px;
+      padding: 10px;
     }}
 
     .insight-card {{
-      margin-bottom: 12px;
-      padding: 14px 16px;
-      border: 1px solid #e2e8f0;
-      border-radius: 14px;
-      background: #f8fafc;
+      margin-bottom: 10px;
+      padding: 12px 14px;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      background: #111827;
       page-break-inside: avoid;
     }}
 
@@ -1075,32 +1076,32 @@ def build_dashboard_report_email_html(
     }}
 
     .insight-card.insight-primary {{
-      background: #fff7ed;
-      border-color: #fdba74;
+      background: rgba(245, 158, 11, 0.10);
+      border-color: rgba(245, 158, 11, 0.35);
     }}
 
     .insight-title {{
-      margin-bottom: 6px;
-      color: #0f172a;
-      font-size: 13px;
+      margin-bottom: 5px;
+      color: #ffffff;
+      font-size: 12px;
       font-weight: 700;
-      line-height: 1.35;
+      line-height: 1.25;
     }}
 
     .insight-message {{
-      color: #334155;
-      font-size: 13px;
-      line-height: 1.55;
+      color: #cbd5e1;
+      font-size: 12px;
+      line-height: 1.4;
       word-break: break-word;
     }}
 
-    .footer {{
-      padding: 14px 22px 18px 22px;
-      border-top: 1px solid #e2e8f0;
-      color: #64748b;
-      font-size: 11px;
-      line-height: 1.5;
-      background: #f8fafc;
+    .footer-inline {{
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #1e293b;
+      color: #94a3b8;
+      font-size: 10px;
+      line-height: 1.4;
     }}
   </style>
 </head>
@@ -1176,10 +1177,10 @@ def build_dashboard_report_email_html(
             {insights_html}
           </div>
         </div>
-      </div>
 
-      <div class="footer">
-        Generated by Easy-dash.
+        <div class="footer-inline">
+          Generated by Easy-dash.
+        </div>
       </div>
     </div>
   </div>
