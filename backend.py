@@ -5479,6 +5479,24 @@ def draw_pie_chart(c, center_x, center_y, radius, items, colors_hex):
         start_angle -= angle
 
 
+def build_safe_pdf_filename(file_name: Optional[str]) -> str:
+    base_name = (file_name or "dashboard").strip()
+
+    if not base_name:
+        base_name = "dashboard"
+
+    base_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base_name)
+    base_name = base_name.strip("._-") or "dashboard"
+
+    if base_name.lower().endswith(".csv"):
+        base_name = base_name[:-4] or "dashboard"
+
+    if not base_name.lower().endswith(".pdf"):
+        base_name = f"{base_name}.pdf"
+
+    return base_name
+
+
 
 
 @app.get("/dashboard/{dashboard_id}/pdf")
@@ -5487,6 +5505,8 @@ def download_dashboard_pdf(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    check_pdf_rate_limit(current_user.id)
+
     dashboard = (
         db.query(Dashboard)
         .filter(Dashboard.id == dashboard_id, Dashboard.user_id == current_user.id)
@@ -5499,6 +5519,11 @@ def download_dashboard_pdf(
     try:
         dashboard_payload = json.loads(dashboard.dashboard_json or "{}")
     except Exception:
+        logger.exception(
+            "Invalid saved dashboard JSON for dashboard_id=%s user_id=%s",
+            dashboard_id,
+            current_user.id,
+        )
         raise HTTPException(status_code=500, detail="Saved dashboard data is invalid.")
 
     try:
@@ -5509,17 +5534,38 @@ def download_dashboard_pdf(
 
         pdf_bytes = HTML(string=html_content).write_pdf()
 
-        safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", dashboard.file_name or "dashboard")
-        if not safe_filename.lower().endswith(".pdf"):
-            safe_filename = f"{safe_filename}.pdf"
+        if not pdf_bytes:
+            logger.error(
+                "Empty PDF generated for dashboard_id=%s user_id=%s",
+                dashboard_id,
+                current_user.id,
+            )
+            raise HTTPException(status_code=500, detail="Failed to generate PDF.")
+
+        safe_filename = build_safe_pdf_filename(dashboard.file_name)
+
+        logger.info(
+            "PDF generated successfully for dashboard_id=%s user_id=%s filename=%s",
+            dashboard_id,
+            current_user.id,
+            safe_filename,
+        )
 
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{safe_filename}"'
+                "Content-Disposition": f'attachment; filename="{safe_filename}"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
             },
         )
-    except Exception as e:
-        logger.exception("Failed generating PDF for dashboard_id=%s", dashboard_id)
-        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed generating PDF for dashboard_id=%s user_id=%s",
+            dashboard_id,
+            current_user.id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to generate PDF.")
