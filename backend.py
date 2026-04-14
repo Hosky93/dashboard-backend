@@ -619,7 +619,7 @@ def send_saved_view_report_email(
     except Exception:
         saved_mapping = {}
 
-    email_body_html = build_dashboard_report_email_html(
+    email_body_html = build_dashboard_report_email_html_for_email(
         file_name=dashboard.file_name,
         dashboard_payload=dashboard_payload,
         applied_filters=saved_mapping.get("filters", {}) or {},
@@ -2623,7 +2623,7 @@ async def send_dashboard_report(
     except Exception:
         saved_mapping = {}
 
-    email_body_html = build_dashboard_report_email_html(
+    email_body_html = build_dashboard_report_email_html_for_email(
         file_name=dashboard.file_name,
         dashboard_payload=dashboard_payload,
         applied_filters=saved_mapping.get("filters", {}) or {},
