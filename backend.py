@@ -6390,10 +6390,7 @@ def download_dashboard_pdf(
             applied_filters=saved_mapping.get("filters", {}) or {},
         )
 
-        weasy_doc = HTML(string=html_content)
-
-        png_bytes = weasy_doc.write_png()
-        pdf_bytes = weasy_doc.write_pdf()
+        pdf_bytes = HTML(string=html_content).write_pdf()
 
         if not pdf_bytes:
             raise ValueError("WeasyPrint returned empty PDF bytes")
