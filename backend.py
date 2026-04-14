@@ -1169,6 +1169,8 @@ def build_dashboard_report_email_html(
       color: #94a3b8;
       font-size: 13px;
       line-height: 1.35;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .content {{
@@ -1189,6 +1191,7 @@ def build_dashboard_report_email_html(
       border: 1px solid #1e293b;
       border-radius: 12px;
       padding: 8px;
+      overflow: hidden;
     }}
 
     .stat-label {{
@@ -1199,13 +1202,16 @@ def build_dashboard_report_email_html(
       letter-spacing: 0.08em;
       margin-bottom: 6px;
       line-height: 1.2;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .stat-value {{
       color: #ffffff;
       font-size: 18px;
       font-weight: 700;
-      line-height: 1.08;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
       word-break: break-word;
     }}
 
@@ -1361,6 +1367,7 @@ def build_dashboard_report_email_html(
       border-radius: 12px;
       background: #111827;
       page-break-inside: avoid;
+      overflow: hidden;
     }}
 
     .insight-card:last-child {{
@@ -1378,16 +1385,16 @@ def build_dashboard_report_email_html(
       font-size: 12px;
       font-weight: 700;
       line-height: 1.25;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .insight-message {{
       color: #cbd5e1;
       font-size: 11px;
-      line-height: 1.3;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .chart-panel {{
@@ -1432,6 +1439,7 @@ def build_dashboard_report_email_html(
       border: 1px solid #1e293b;
       border-radius: 14px;
       background: #0b1220;
+      overflow: hidden;
     }}
 
     .filters-title {{
@@ -1441,6 +1449,8 @@ def build_dashboard_report_email_html(
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.08em;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .filters-row {{
@@ -1449,6 +1459,7 @@ def build_dashboard_report_email_html(
 
     .filter-chip {{
       display: inline-block;
+      max-width: 100%;
       margin-right: 6px;
       margin-bottom: 6px;
       padding: 6px 9px;
@@ -1457,19 +1468,26 @@ def build_dashboard_report_email_html(
       border: 1px solid #1f2937;
       color: #cbd5e1;
       font-size: 10px;
-      line-height: 1.2;
+      line-height: 1.25;
       vertical-align: top;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .filter-chip-label {{
       color: #94a3b8;
       font-weight: 700;
       margin-right: 4px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .filter-chip-value {{
       color: #ffffff;
       font-weight: 600;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .footer-inline {{
@@ -1479,6 +1497,8 @@ def build_dashboard_report_email_html(
       color: #94a3b8;
       font-size: 10px;
       line-height: 1.4;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
   </style>
 </head>
@@ -2014,9 +2034,10 @@ def build_dashboard_report_email_html_for_email(
       padding: 8px 8px;
       color: #e5e7eb;
       font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      line-height: 1.25;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .data-value {{
@@ -2032,6 +2053,8 @@ def build_dashboard_report_email_html_for_email(
       text-align: center;
       color: #94a3b8;
       padding: 14px 10px !important;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
 
     .bottom-row {{
