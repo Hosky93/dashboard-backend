@@ -771,7 +771,11 @@ def build_dashboard_report_email_html(
     email_insights = extract_email_insights(dashboard_payload)
 
     revenue_text = format_email_money(total_revenue, currency_symbol)
-    orders_text = f"{num_sales:,}" if isinstance(num_sales, int) else str(num_sales) if num_sales is not None else "—"
+    orders_text = (
+        f"{num_sales:,}" if isinstance(num_sales, int)
+        else str(num_sales) if num_sales is not None
+        else "—"
+    )
     aov_text = format_email_money(average_sale, currency_symbol)
     top_customer_text = html_escape(top_customers[0].get("customer") if top_customers else "—")
     date_range_text = f"{date_range.get('start', '—')} to {date_range.get('end', '—')}"
@@ -840,10 +844,10 @@ def build_dashboard_report_email_html(
   <meta charset="UTF-8" />
   <title>Easy-dash Dashboard Report</title>
   <style>
-    @page {
-    size: A4;
-    margin: 7mm;
-    }
+    @page {{
+      size: A4;
+      margin: 7mm;
+    }}
 
     * {{
       box-sizing: border-box;
@@ -871,8 +875,8 @@ def build_dashboard_report_email_html(
     }}
 
     .hero {{
-    background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
-    padding: 16px 18px 12px 18px;
+      background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+      padding: 16px 18px 12px 18px;
     }}
 
     .badge {{
@@ -903,25 +907,25 @@ def build_dashboard_report_email_html(
       line-height: 1.35;
     }}
 
-    .content {
-    padding: 12px;
-    }
+    .content {{
+      padding: 12px;
+    }}
 
-    .stats-grid {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 6px;
-    table-layout: fixed;
-    margin-bottom: 10px;
-    }
+    .stats-grid {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 6px;
+      table-layout: fixed;
+      margin-bottom: 10px;
+    }}
 
-    .stats-grid td {
-    vertical-align: top;
-    background: #0f172a;
-    border: 1px solid #1e293b;
-    border-radius: 12px;
-    padding: 8px;
-    }
+    .stats-grid td {{
+      vertical-align: top;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 8px;
+    }}
 
     .stat-label {{
       color: #94a3b8;
@@ -934,11 +938,11 @@ def build_dashboard_report_email_html(
     }}
 
     .stat-value {{
-    color: #ffffff;
-    font-size: 18px;
-    font-weight: 700;
-    line-height: 1.08;
-    word-break: break-word;
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.08;
+      word-break: break-word;
     }}
 
     .two-col {{
@@ -990,24 +994,24 @@ def build_dashboard_report_email_html(
       line-height: 1.3;
     }}
 
-    .table-wrap {
-    padding: 4px 8px 8px 8px;
-    }
+    .table-wrap {{
+      padding: 4px 8px 8px 8px;
+    }}
 
-table.data-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0 4px;
-  table-layout: fixed;
-}
+    table.data-table {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 4px;
+      table-layout: fixed;
+    }}
 
     .data-table td {{
-    background: #111827;
-    font-size: 11px;
-    padding: 6px 8px;
-    border-top: 1px solid #1f2937;
-    border-bottom: 1px solid #1f2937;
-    vertical-align: middle;
+      background: #111827;
+      font-size: 11px;
+      padding: 6px 8px;
+      border-top: 1px solid #1f2937;
+      border-bottom: 1px solid #1f2937;
+      vertical-align: middle;
     }}
 
     .data-table tr td:first-child {{
@@ -1029,13 +1033,13 @@ table.data-table {
       font-weight: 700;
     }}
 
-    .label-cell {
-    color: #e5e7eb;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    }
+    .label-cell {{
+      color: #e5e7eb;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
 
     .value-cell {{
       width: 100px;
@@ -1090,18 +1094,18 @@ table.data-table {
     }}
 
     .insight-message {{
-    color: #cbd5e1;
-    font-size: 11px;
-    line-height: 1.3;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+      color: #cbd5e1;
+      font-size: 11px;
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }}
 
     .footer-inline {{
-  margin-top: 6px;
-  padding-top: 8px;
+      margin-top: 6px;
+      padding-top: 8px;
       border-top: 1px solid #1e293b;
       color: #94a3b8;
       font-size: 10px;
@@ -1191,6 +1195,10 @@ table.data-table {
 </body>
 </html>
     """.strip()
+
+# =============================================================
+# AUTH / SECURITY
+# =============================================================
 
 # =============================================================
 # AUTH / SECURITY
