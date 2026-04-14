@@ -964,12 +964,11 @@ def build_dashboard_report_email_html(
             labels.append(_short_period_label(item.get("period"), revenue_grouping))
 
         if values:
-            latest_value_text = html_escape(format_email_money(values[-1], currency_symbol))
             max_value = max(values) or 1.0
 
             chart_width = 520
             chart_height = 180
-            left_pad = 26
+            left_pad = 42
             right_pad = 12
             top_pad = 16
             bottom_pad = 34
@@ -983,11 +982,25 @@ def build_dashboard_report_email_html(
             start_x = left_pad + max(0, (plot_width - total_bars_width) / 2)
 
             grid_lines_svg = ""
-            for step in range(5):
-                y = top_pad + (plot_height * step / 4)
+            y_axis_labels_svg = ""
+
+            y_ticks = 4
+            rounded_top = int(math.ceil(max_value / 10.0) * 10)
+            if rounded_top <= 0:
+                rounded_top = 10
+
+            for step in range(y_ticks + 1):
+                y = top_pad + (plot_height * step / y_ticks)
+                tick_value = rounded_top - (rounded_top * step / y_ticks)
+
                 grid_lines_svg += f'''
                     <line x1="{left_pad}" y1="{y:.1f}" x2="{chart_width - right_pad}" y2="{y:.1f}"
                           stroke="#17304A" stroke-width="1" opacity="0.65" />
+                '''
+
+                y_axis_labels_svg += f'''
+                    <text x="{left_pad - 8}" y="{y + 3:.1f}" text-anchor="end"
+                          font-size="9" fill="#7C8CA5">{int(round(tick_value))}</text>
                 '''
 
             bars_svg = ""
@@ -1010,10 +1023,6 @@ def build_dashboard_report_email_html(
                 '''
 
             chart_panel_html = f"""
-                <div class="chart-summary-row">
-                  <div class="chart-summary-label">Latest</div>
-                  <div class="chart-summary-value">{latest_value_text}</div>
-                </div>
                 <div class="svg-chart-wrap">
                   <svg viewBox="0 0 {chart_width} {chart_height}" class="svg-bar-chart" role="img" aria-label="Revenue trend chart">
                     <defs>
@@ -1023,6 +1032,7 @@ def build_dashboard_report_email_html(
                       </linearGradient>
                     </defs>
                     {grid_lines_svg}
+                    {y_axis_labels_svg}
                     <line x1="{left_pad}" y1="{top_pad + plot_height:.1f}" x2="{chart_width - right_pad}" y2="{top_pad + plot_height:.1f}"
                           stroke="#23405D" stroke-width="1.2" />
                     {bars_svg}
@@ -2098,23 +2108,15 @@ def build_dashboard_report_email_html_for_email(
     }}
 
     .chart-summary-row {{
-      width: 100%;
-      margin-bottom: 10px;
+      display: none;
     }}
 
     .chart-summary-label {{
-      color: #94a3b8;
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin-bottom: 4px;
+      display: none;
     }}
 
     .chart-summary-value {{
-      color: #ffffff;
-      font-size: 18px;
-      font-weight: 700;
+      display: none;
     }}
 
     .email-chart-table {{
