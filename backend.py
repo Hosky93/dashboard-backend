@@ -1503,6 +1503,766 @@ def build_dashboard_report_email_html(
 </html>
     """.strip()
 
+def build_dashboard_report_email_html_for_email(
+    file_name: str,
+    dashboard_payload: Dict[str, Any],
+    applied_filters: Optional[Dict[str, Any]] = None,
+) -> str:
+    summary = dashboard_payload.get("summary", {}) or {}
+    charts = dashboard_payload.get("charts", {}) or {}
+    currency_symbol = get_email_currency_symbol(dashboard_payload)
+
+    total_revenue = summary.get("total_revenue")
+    num_sales = summary.get("num_sales")
+    average_sale = summary.get("average_sale")
+    date_range = summary.get("date_range", {}) or {}
+
+    top_products = (charts.get("top_products") or [])[:5]
+    top_customers = (charts.get("top_customers") or [])[:5]
+    email_insights = extract_email_insights(dashboard_payload)
+
+    revenue_over_time = (
+        charts.get("revenue_over_time") or {}
+        if isinstance(charts.get("revenue_over_time"), dict)
+        else {}
+    )
+    revenue_points = revenue_over_time.get("points") or []
+    revenue_grouping = str(revenue_over_time.get("grouping") or "period").strip().lower()
+
+    revenue_text = format_email_money(total_revenue, currency_symbol)
+    orders_text = (
+        f"{num_sales:,}" if isinstance(num_sales, int)
+        else str(num_sales) if num_sales is not None
+        else "—"
+    )
+    aov_text = format_email_money(average_sale, currency_symbol)
+    top_customer_text = html_escape(top_customers[0].get("customer") if top_customers else "—")
+    date_range_text = f"{date_range.get('start', '—')} to {date_range.get('end', '—')}"
+
+    top_products_rows = ""
+    if top_products:
+        for index, item in enumerate(top_products, start=1):
+            product_name = html_escape(item.get("product") or "Unknown product")
+            revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
+            top_products_rows += f"""
+                <tr>
+                    <td class="rank">{index}</td>
+                    <td class="label-cell">{product_name}</td>
+                    <td class="value-cell">{revenue_value}</td>
+                </tr>
+            """
+    else:
+        top_products_rows = """
+            <tr>
+                <td colspan="3" class="empty-cell">No product data available</td>
+            </tr>
+        """
+
+    top_customers_rows = ""
+    if top_customers:
+        for index, item in enumerate(top_customers, start=1):
+            customer_name = html_escape(item.get("customer") or "Unknown customer")
+            revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
+            top_customers_rows += f"""
+                <tr>
+                    <td class="rank">{index}</td>
+                    <td class="label-cell">{customer_name}</td>
+                    <td class="value-cell">{revenue_value}</td>
+                </tr>
+            """
+    else:
+        top_customers_rows = """
+            <tr>
+                <td colspan="3" class="empty-cell">No customer data available</td>
+            </tr>
+        """
+
+    insights_html = ""
+    if email_insights:
+        for index, insight in enumerate(email_insights[:3]):
+            title = html_escape(insight.get("title") or "Insight")
+            message = html_escape(insight.get("message") or "")
+            modifier_class = " insight-primary" if index == 0 else ""
+            insights_html += f"""
+                <div class="insight-card{modifier_class}">
+                    <div class="insight-title">{title}</div>
+                    <div class="insight-message">{message}</div>
+                </div>
+            """
+    else:
+        insights_html = """
+            <div class="insight-card">
+                <div class="insight-message">No insights available</div>
+            </div>
+        """
+
+    def _short_period_label(value: Any, grouping: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "—"
+
+        if grouping == "day":
+            try:
+                dt = datetime.fromisoformat(text)
+                return dt.strftime("%b %d")
+            except Exception:
+                return text[-5:] if len(text) > 5 else text
+
+        if grouping == "week":
+            return text[-7:] if len(text) > 7 else text
+
+        if grouping == "month":
+            try:
+                dt = datetime.fromisoformat(f"{text}-01")
+                return dt.strftime("%b")
+            except Exception:
+                return text[-7:] if len(text) > 7 else text
+
+        return text[-8:] if len(text) > 8 else text
+
+    chart_panel_html = """
+        <div class="empty-chart-state">No revenue trend data available</div>
+    """
+
+    if isinstance(revenue_points, list) and revenue_points:
+        trimmed_points = revenue_points[-7:]
+
+        values: List[float] = []
+        labels: List[str] = []
+
+        for item in trimmed_points:
+            if not isinstance(item, dict):
+                continue
+
+            revenue_value = item.get("revenue")
+            try:
+                numeric_value = float(revenue_value or 0)
+            except Exception:
+                numeric_value = 0.0
+
+            values.append(max(numeric_value, 0.0))
+            labels.append(_short_period_label(item.get("period"), revenue_grouping))
+
+        if values:
+            max_value = max(values) or 1.0
+            latest_value_text = html_escape(format_email_money(values[-1], currency_symbol))
+
+            rows_html = ""
+            for idx, value in enumerate(values):
+                width_pct = 0 if max_value == 0 else max(10, round((value / max_value) * 100))
+                rows_html += f"""
+                    <tr>
+                      <td class="email-chart-label">{html_escape(labels[idx])}</td>
+                      <td class="email-chart-bar-cell">
+                        <table role="presentation" class="email-chart-bar-table">
+                          <tr>
+                            <td class="email-chart-bar-fill" style="width:{width_pct}%;"></td>
+                            <td class="email-chart-bar-rest"></td>
+                          </tr>
+                        </table>
+                      </td>
+                      <td class="email-chart-value">{html_escape(format_email_money(value, currency_symbol))}</td>
+                    </tr>
+                """
+
+            chart_panel_html = f"""
+                <div class="chart-summary-row">
+                  <div class="chart-summary-label">Latest</div>
+                  <div class="chart-summary-value">{latest_value_text}</div>
+                </div>
+                <table role="presentation" class="email-chart-table">
+                  {rows_html}
+                </table>
+            """
+
+    filters = applied_filters or {}
+
+    def _normalize_list(value: Any) -> List[str]:
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [v.strip() for v in value.split("|") if v.strip()]
+        return []
+
+    active_filters: List[Tuple[str, str]] = []
+
+    filter_start = str(filters.get("start_date") or filters.get("filter_start_date") or "").strip()
+    filter_end = str(filters.get("end_date") or filters.get("filter_end_date") or "").strip()
+    if filter_start or filter_end:
+        if filter_start and filter_end:
+            active_filters.append(("Date", f"{filter_start} → {filter_end}"))
+        elif filter_start:
+            active_filters.append(("Date", f"From {filter_start}"))
+        elif filter_end:
+            active_filters.append(("Date", f"Up to {filter_end}"))
+
+    selected_products = _normalize_list(filters.get("product") or filters.get("filter_product"))
+    if selected_products:
+        active_filters.append(("Product", ", ".join(selected_products[:3])))
+
+    selected_customers = _normalize_list(filters.get("customer") or filters.get("filter_customer"))
+    if selected_customers:
+        active_filters.append(("Customer", ", ".join(selected_customers[:3])))
+
+    comparison_enabled = bool(filters.get("comparison_enabled"))
+    comparison_mode = str(filters.get("comparison_mode") or "").strip()
+    comparison_preset = str(filters.get("comparison_preset") or "").strip()
+    if comparison_enabled:
+        if comparison_preset:
+            active_filters.append(("Compare", comparison_preset.replace("_", " ").title()))
+        elif comparison_mode and comparison_mode != "none":
+            active_filters.append(("Compare", comparison_mode.replace("_", " ").title()))
+
+    applied_filters_html = ""
+    if active_filters:
+        chips_html = ""
+        for label, value in active_filters:
+            chips_html += f"""
+                <div class="filter-chip">
+                  <span class="filter-chip-label">{html_escape(label)}:</span>
+                  <span class="filter-chip-value">{html_escape(value)}</span>
+                </div>
+            """
+
+        applied_filters_html = f"""
+          <div class="filters-panel">
+            <div class="filters-title">Applied filters</div>
+            <div class="filters-row">
+              {chips_html}
+            </div>
+          </div>
+        """
+
+    chart_subtitle = f"Recent revenue by {html_escape(revenue_grouping)}"
+
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Easy-dash Dashboard Report</title>
+  <style>
+    body {{
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+      font-family: Arial, Helvetica, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }}
+
+    .page {{
+      width: 100%;
+      background: #020617;
+      padding: 20px 0;
+    }}
+
+    .shell {{
+      max-width: 960px;
+      margin: 0 auto;
+      background: linear-gradient(180deg, #0b1120 0%, #020617 100%);
+      border: 1px solid #1e293b;
+      border-radius: 18px;
+      overflow: hidden;
+    }}
+
+    .hero {{
+      background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+      padding: 16px 18px 12px 18px;
+    }}
+
+    .badge {{
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.10);
+      border: 1px solid rgba(16, 185, 129, 0.30);
+      color: #a7f3d0;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+
+    .hero h1 {{
+      margin: 12px 0 6px 0;
+      color: #ffffff;
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 700;
+    }}
+
+    .hero .subtle {{
+      margin: 0;
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.35;
+    }}
+
+    .content {{
+      padding: 12px;
+    }}
+
+    .stats-grid {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 6px;
+      table-layout: fixed;
+      margin-bottom: 10px;
+    }}
+
+    .stats-grid td {{
+      vertical-align: top;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 8px;
+    }}
+
+    .stat-label {{
+      color: #94a3b8;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+      line-height: 1.2;
+    }}
+
+    .stat-value {{
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.08;
+      word-break: break-word;
+    }}
+
+    .two-col {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-bottom: 10px;
+    }}
+
+    .two-col td {{
+      width: 50%;
+      vertical-align: top;
+    }}
+
+    .col-left {{
+      padding-right: 6px;
+    }}
+
+    .col-right {{
+      padding-left: 6px;
+    }}
+
+    .panel {{
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      overflow: hidden;
+    }}
+
+    .panel-head {{
+      padding: 12px 14px 9px 14px;
+      border-bottom: 1px solid #1e293b;
+      background: #0f172a;
+    }}
+
+    .panel-title {{
+      margin: 0;
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.15;
+    }}
+
+    .panel-subtitle {{
+      margin: 4px 0 0 0;
+      color: #94a3b8;
+      font-size: 11px;
+      line-height: 1.3;
+    }}
+
+    .table-wrap {{
+      padding: 4px 8px 8px 8px;
+    }}
+
+    table.data-table {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 4px;
+      table-layout: fixed;
+    }}
+
+    .data-table td {{
+      background: #111827;
+      font-size: 11px;
+      padding: 6px 8px;
+      border-top: 1px solid #1f2937;
+      border-bottom: 1px solid #1f2937;
+      vertical-align: middle;
+    }}
+
+    .data-table tr td:first-child {{
+      border-left: 1px solid #1f2937;
+      border-top-left-radius: 10px;
+      border-bottom-left-radius: 10px;
+    }}
+
+    .data-table tr td:last-child {{
+      border-right: 1px solid #1f2937;
+      border-top-right-radius: 10px;
+      border-bottom-right-radius: 10px;
+    }}
+
+    .rank {{
+      width: 30px;
+      text-align: center;
+      color: #94a3b8;
+      font-weight: 700;
+    }}
+
+    .label-cell {{
+      color: #e5e7eb;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+
+    .value-cell {{
+      width: 100px;
+      text-align: right;
+      color: #ffffff;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+
+    .empty-cell {{
+      text-align: center;
+      color: #94a3b8;
+      padding: 14px 10px !important;
+    }}
+
+    .bottom-row {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-bottom: 8px;
+    }}
+
+    .bottom-row td {{
+      width: 50%;
+      vertical-align: top;
+    }}
+
+    .bottom-left {{
+      padding-right: 6px;
+    }}
+
+    .bottom-right {{
+      padding-left: 6px;
+    }}
+
+    .insights-panel {{
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      overflow: hidden;
+    }}
+
+    .insights-body {{
+      padding: 8px;
+    }}
+
+    .insight-card {{
+      margin-bottom: 8px;
+      padding: 10px 12px;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      background: #111827;
+    }}
+
+    .insight-card:last-child {{
+      margin-bottom: 0;
+    }}
+
+    .insight-card.insight-primary {{
+      background: rgba(245, 158, 11, 0.10);
+      border-color: rgba(245, 158, 11, 0.35);
+    }}
+
+    .insight-title {{
+      margin-bottom: 5px;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.25;
+    }}
+
+    .insight-message {{
+      color: #cbd5e1;
+      font-size: 11px;
+      line-height: 1.3;
+    }}
+
+    .chart-panel {{
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      overflow: hidden;
+    }}
+
+    .chart-body {{
+      padding: 10px;
+    }}
+
+    .chart-summary-row {{
+      width: 100%;
+      margin-bottom: 10px;
+    }}
+
+    .chart-summary-label {{
+      color: #94a3b8;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }}
+
+    .chart-summary-value {{
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 700;
+    }}
+
+    .email-chart-table {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 8px;
+      table-layout: fixed;
+    }}
+
+    .email-chart-label {{
+      width: 66px;
+      color: #94a3b8;
+      font-size: 10px;
+      vertical-align: middle;
+      white-space: nowrap;
+      padding-right: 8px;
+    }}
+
+    .email-chart-bar-cell {{
+      vertical-align: middle;
+    }}
+
+    .email-chart-bar-table {{
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      height: 12px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 999px;
+      overflow: hidden;
+    }}
+
+    .email-chart-bar-fill {{
+      background: #10b981;
+      height: 12px;
+      font-size: 0;
+      line-height: 0;
+    }}
+
+    .email-chart-bar-rest {{
+      background: transparent;
+      height: 12px;
+      font-size: 0;
+      line-height: 0;
+    }}
+
+    .email-chart-value {{
+      width: 84px;
+      color: #ffffff;
+      font-size: 10px;
+      font-weight: 700;
+      text-align: right;
+      vertical-align: middle;
+      white-space: nowrap;
+      padding-left: 8px;
+    }}
+
+    .empty-chart-state {{
+      padding: 58px 10px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 11px;
+      line-height: 1.4;
+    }}
+
+    .filters-panel {{
+      margin-top: 2px;
+      margin-bottom: 6px;
+      padding: 9px 10px;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      background: #0b1220;
+    }}
+
+    .filters-title {{
+      margin-bottom: 7px;
+      color: #94a3b8;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+
+    .filters-row {{
+      font-size: 0;
+    }}
+
+    .filter-chip {{
+      display: inline-block;
+      margin-right: 6px;
+      margin-bottom: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid #1f2937;
+      color: #cbd5e1;
+      font-size: 10px;
+      line-height: 1.2;
+      vertical-align: top;
+    }}
+
+    .filter-chip-label {{
+      color: #94a3b8;
+      font-weight: 700;
+      margin-right: 4px;
+    }}
+
+    .filter-chip-value {{
+      color: #ffffff;
+      font-weight: 600;
+    }}
+
+    .footer-inline {{
+      margin-top: 4px;
+      padding-top: 7px;
+      border-top: 1px solid #1e293b;
+      color: #94a3b8;
+      font-size: 10px;
+      line-height: 1.4;
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="shell">
+      <div class="hero">
+        <div class="badge">Easy-dash</div>
+        <h1>Dashboard report</h1>
+        <p class="subtle">{html_escape(file_name)}</p>
+        <p class="subtle">Date range: {html_escape(date_range_text)}</p>
+      </div>
+
+      <div class="content">
+        <table class="stats-grid" role="presentation">
+          <tr>
+            <td>
+              <div class="stat-label">Total revenue</div>
+              <div class="stat-value">{html_escape(revenue_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Orders</div>
+              <div class="stat-value">{html_escape(orders_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Average order value</div>
+              <div class="stat-value">{html_escape(aov_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Top customer</div>
+              <div class="stat-value">{top_customer_text}</div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="two-col" role="presentation">
+          <tr>
+            <td class="col-left">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Top products</h2>
+                  <p class="panel-subtitle">Highest-performing products by revenue</p>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table" role="presentation">
+                    {top_products_rows}
+                  </table>
+                </div>
+              </div>
+            </td>
+            <td class="col-right">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Top customers</h2>
+                  <p class="panel-subtitle">Customer performance ranking</p>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table" role="presentation">
+                    {top_customers_rows}
+                  </table>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="bottom-row" role="presentation">
+          <tr>
+            <td class="bottom-left">
+              <div class="insights-panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Key insights</h2>
+                  <p class="panel-subtitle">Smart takeaways from your current dashboard view</p>
+                </div>
+                <div class="insights-body">
+                  {insights_html}
+                </div>
+              </div>
+            </td>
+            <td class="bottom-right">
+              <div class="chart-panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Revenue trend</h2>
+                  <p class="panel-subtitle">{chart_subtitle}</p>
+                </div>
+                <div class="chart-body">
+                  {chart_panel_html}
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        {applied_filters_html}
+
+        <div class="footer-inline">
+          Generated by Easy-dash.
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    """.strip()
+
 # =============================================================
 # AUTH / SECURITY
 # =============================================================
