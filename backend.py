@@ -840,10 +840,10 @@ def build_dashboard_report_email_html(
   <meta charset="UTF-8" />
   <title>Easy-dash Dashboard Report</title>
   <style>
-    @page {{
-      size: A4;
-      margin: 9mm;
-    }}
+    @page {
+    size: A4;
+    margin: 7mm;
+    }
 
     * {{
       box-sizing: border-box;
@@ -904,23 +904,23 @@ def build_dashboard_report_email_html(
     }}
 
     .content {
-    padding: 14px;
+    padding: 12px;
     }
 
-    .stats-grid {{
-      width: 100%;
-      border-collapse: separate;
-      border-spacing: 8px;
-      table-layout: fixed;
-      margin-bottom: 14px;
-    }}
+    .stats-grid {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 6px;
+    table-layout: fixed;
+    margin-bottom: 10px;
+    }
 
     .stats-grid td {
     vertical-align: top;
     background: #0f172a;
     border: 1px solid #1e293b;
-    border-radius: 14px;
-    padding: 10px;
+    border-radius: 12px;
+    padding: 8px;
     }
 
     .stat-label {{
@@ -934,11 +934,11 @@ def build_dashboard_report_email_html(
     }}
 
     .stat-value {{
-      color: #ffffff;
-      font-size: 19px;
-      font-weight: 700;
-      line-height: 1.08;
-      word-break: break-word;
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.08;
+    word-break: break-word;
     }}
 
     .two-col {{
@@ -990,24 +990,24 @@ def build_dashboard_report_email_html(
       line-height: 1.3;
     }}
 
-    .table-wrap {{
-      padding: 6px 10px 10px 10px;
-    }}
+    .table-wrap {
+    padding: 4px 8px 8px 8px;
+    }
 
-    table.data-table {{
-      width: 100%;
-      border-collapse: separate;
-      border-spacing: 0 6px;
-      table-layout: fixed;
-    }}
+table.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 4px;
+  table-layout: fixed;
+}
 
     .data-table td {{
-      background: #111827;
-      font-size: 12px;
-      padding: 8px 10px;
-      border-top: 1px solid #1f2937;
-      border-bottom: 1px solid #1f2937;
-      vertical-align: middle;
+    background: #111827;
+    font-size: 11px;
+    padding: 6px 8px;
+    border-top: 1px solid #1f2937;
+    border-bottom: 1px solid #1f2937;
+    vertical-align: middle;
     }}
 
     .data-table tr td:first-child {{
@@ -1064,8 +1064,8 @@ def build_dashboard_report_email_html(
     }}
 
     .insight-card {{
-      margin-bottom: 10px;
-      padding: 12px 14px;
+      margin-bottom: 8px;
+      padding: 10px 12px;
       border: 1px solid #1f2937;
       border-radius: 12px;
       background: #111827;
@@ -1089,19 +1089,19 @@ def build_dashboard_report_email_html(
       line-height: 1.25;
     }}
 
-    .insight-message {
+    .insight-message {{
     color: #cbd5e1;
-    font-size: 12px;
-    line-height: 1.35;
+    font-size: 11px;
+    line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    }
+    }}
 
     .footer-inline {{
-      margin-top: 10px;
-      padding-top: 10px;
+  margin-top: 6px;
+  padding-top: 8px;
       border-top: 1px solid #1e293b;
       color: #94a3b8;
       font-size: 10px;
