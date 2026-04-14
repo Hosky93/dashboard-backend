@@ -876,7 +876,7 @@ def build_dashboard_report_email_html(
 
         return text[-8:] if len(text) > 8 else text
 
-    chart_panel_html = """
+        chart_panel_html = """
         <div class="empty-chart-state">No revenue trend data available</div>
     """
 
@@ -900,59 +900,38 @@ def build_dashboard_report_email_html(
             labels.append(_short_period_label(item.get("period"), revenue_grouping))
 
         if values:
-            chart_width = 520
-            chart_height = 170
-            left_pad = 18
-            right_pad = 16
-            top_pad = 18
-            bottom_pad = 34
-
-            plot_width = chart_width - left_pad - right_pad
-            plot_height = chart_height - top_pad - bottom_pad
             max_value = max(values) or 1.0
-            count = len(values)
-            gap = 8
-            bar_width = max(20, min(44, int((plot_width - (gap * max(count - 1, 0))) / max(count, 1))))
-            bars_total_width = (count * bar_width) + (gap * max(count - 1, 0))
-            start_x = left_pad + max(0, (plot_width - bars_total_width) / 2)
+            latest_value_text = html_escape(format_email_money(values[-1], currency_symbol))
 
-            grid_lines = ""
-            for step in range(3):
-                y = top_pad + (plot_height * step / 2)
-                grid_lines += f'''
-                    <line x1="{left_pad}" y1="{y:.1f}" x2="{chart_width - right_pad}" y2="{y:.1f}"
-                          stroke="#1E293B" stroke-width="1" opacity="0.55" />
-                '''
-
-            bars_svg = ""
-            labels_svg = ""
+            bars_html = ""
+            labels_html = ""
 
             for idx, value in enumerate(values):
-                bar_height = 0 if max_value == 0 else (value / max_value) * plot_height
-                x = start_x + idx * (bar_width + gap)
-                y = top_pad + (plot_height - bar_height)
-                label_x = x + (bar_width / 2)
-
-                bars_svg += f'''
-                    <rect x="{x:.1f}" y="{y:.1f}" width="{bar_width}" height="{bar_height:.1f}"
-                          rx="6" ry="6" fill="#10B981" fill-opacity="0.92" />
-                '''
-
-                labels_svg += f'''
-                    <text x="{label_x:.1f}" y="{chart_height - 12}" text-anchor="middle"
-                          font-size="9.5" fill="#94A3B8">{html_escape(labels[idx])}</text>
-                '''
+                height_pct = 0 if max_value == 0 else max(8, round((value / max_value) * 100))
+                bars_html += f"""
+                    <td class="bar-cell">
+                      <div class="bar-track">
+                        <div class="bar-fill" style="height:{height_pct}%;"></div>
+                      </div>
+                    </td>
+                """
+                labels_html += f"""
+                    <td class="bar-label-cell">{html_escape(labels[idx])}</td>
+                """
 
             chart_panel_html = f"""
-                <div class="chart-wrap">
-                  <svg viewBox="0 0 {chart_width} {chart_height}" class="trend-chart" role="img" aria-label="Revenue trend chart">
-                    {grid_lines}
-                    <line x1="{left_pad}" y1="{top_pad + plot_height}" x2="{chart_width - right_pad}" y2="{top_pad + plot_height}"
-                          stroke="#1E293B" stroke-width="1" />
-                    {bars_svg}
-                    {labels_svg}
-                  </svg>
+                <div class="chart-summary-row">
+                  <div class="chart-summary-label">Latest</div>
+                  <div class="chart-summary-value">{latest_value_text}</div>
                 </div>
+                <table role="presentation" class="bar-chart-table">
+                  <tr>
+                    {bars_html}
+                  </tr>
+                  <tr>
+                    {labels_html}
+                  </tr>
+                </table>
             """
 
     filters = applied_filters or {}
@@ -1314,19 +1293,47 @@ def build_dashboard_report_email_html(
       padding: 8px 10px 8px 10px;
     }}
 
-    .chart-wrap {{
+        .bar-chart-table {{
       width: 100%;
-      height: 166px;
+      border-collapse: separate;
+      border-spacing: 6px 0;
+      table-layout: fixed;
       border: 1px solid #162133;
       border-radius: 12px;
       background: linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(2, 6, 23, 0.98) 100%);
-      padding: 4px;
+      padding: 6px;
     }}
 
-    .trend-chart {{
+    .bar-cell {{
+      height: 130px;
+      vertical-align: bottom;
+    }}
+
+    .bar-track {{
+      height: 118px;
       width: 100%;
-      height: 156px;
-      display: block;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid #162133;
+      position: relative;
+      overflow: hidden;
+    }}
+
+    .bar-fill {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-radius: 8px 8px 0 0;
+      background: linear-gradient(180deg, rgba(52, 211, 153, 0.95) 0%, rgba(16, 185, 129, 0.82) 100%);
+    }}
+
+    .bar-label-cell {{
+      padding-top: 8px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 9.5px;
+      white-space: nowrap;
     }}
 
     .empty-chart-state {{
