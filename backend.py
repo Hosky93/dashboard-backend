@@ -384,14 +384,10 @@ def send_email_message(
     body_html: Optional[str] = None,
     from_address: Optional[str] = None,
     from_name: Optional[str] = None,
-    inline_chart_png_bytes: Optional[bytes] = None,
 ) -> None:
     """
     Send an email using the Resend API.
-    Supports an optional inline PNG chart attachment referenced by cid:dashboard_chart
     """
-    import base64
-
     to_email = (to_email or "").strip()
     subject = (subject or "").strip()
     body_text = (body_text or "").strip()
@@ -430,17 +426,6 @@ def send_email_message(
 
     if body_html:
         payload["html"] = body_html
-
-    if inline_chart_png_bytes:
-        payload["attachments"] = [
-            {
-                "filename": "dashboard_chart.png",
-                "content": base64.b64encode(inline_chart_png_bytes).decode("utf-8"),
-                "content_type": "image/png",
-                "disposition": "inline",
-                "content_id": "dashboard_chart",
-            }
-        ]
 
     try:
         response = requests.post(
@@ -640,8 +625,6 @@ def send_saved_view_report_email(
         applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
-    png_bytes = HTML(string=email_body_html).write_png()
-
     send_email_message(
     to_email=(saved_view.report_recipient or "").strip(),
     subject=f"Your dashboard report: {dashboard.file_name}",
@@ -649,7 +632,6 @@ def send_saved_view_report_email(
     body_html=email_body_html,
     from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
     from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
-    inline_chart_png_bytes=png_bytes,
     )
 
 def get_email_currency_symbol(dashboard_payload: Dict[str, Any]) -> str:
@@ -894,11 +876,9 @@ def build_dashboard_report_email_html(
 
         return text[-8:] if len(text) > 8 else text
 
-    chart_panel_html = f"""
-  <div style="margin-top:12px;">
-    <img src="cid:dashboard_chart" style="width:100%; border-radius:12px;" />
-  </div>
-"""
+    chart_panel_html = """
+        <div class="empty-chart-state">No revenue trend data available</div>
+    """
 
     if isinstance(revenue_points, list) and revenue_points:
         trimmed_points = revenue_points[-7:]
@@ -1889,8 +1869,6 @@ async def send_dashboard_report(
         applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
-    png_bytes = HTML(string=email_body_html).write_png()
-
     send_email_message(
     to_email=recipient,
     subject=f"Your dashboard report: {dashboard.file_name}",
@@ -1898,7 +1876,6 @@ async def send_dashboard_report(
     body_html=email_body_html,
     from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
     from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
-    inline_chart_png_bytes=png_bytes,
     )
 
     return {
