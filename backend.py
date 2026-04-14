@@ -640,8 +640,7 @@ def send_saved_view_report_email(
         applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
-    weasy_doc = HTML(string=email_body_html)
-    png_bytes = weasy_doc.write_png()
+    png_bytes = HTML(string=email_body_html).write_png()
 
     send_email_message(
     to_email=(saved_view.report_recipient or "").strip(),
@@ -1890,8 +1889,7 @@ async def send_dashboard_report(
         applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
-    weasy_doc = HTML(string=email_body_html)
-    png_bytes = weasy_doc.write_png()
+    png_bytes = HTML(string=email_body_html).write_png()
 
     send_email_message(
     to_email=recipient,
