@@ -770,6 +770,10 @@ def build_dashboard_report_email_html(
     top_customers = (charts.get("top_customers") or [])[:5]
     email_insights = extract_email_insights(dashboard_payload)
 
+    revenue_over_time = (charts.get("revenue_over_time") or {}) if isinstance(charts.get("revenue_over_time"), dict) else {}
+    revenue_points = revenue_over_time.get("points") or []
+    revenue_grouping = str(revenue_over_time.get("grouping") or "period").strip().lower()
+
     revenue_text = format_email_money(total_revenue, currency_symbol)
     orders_text = (
         f"{num_sales:,}" if isinstance(num_sales, int)
@@ -836,6 +840,83 @@ def build_dashboard_report_email_html(
                 <div class="insight-message">No insights available</div>
             </div>
         """
+
+    def _short_period_label(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "—"
+        if len(text) <= 10:
+            return text
+        return text[-10:]
+
+    chart_panel_html = """
+        <div class="empty-chart-state">No revenue trend data available</div>
+    """
+
+    if isinstance(revenue_points, list) and revenue_points:
+        trimmed_points = revenue_points[-8:]
+
+        values: List[float] = []
+        labels: List[str] = []
+
+        for item in trimmed_points:
+            if not isinstance(item, dict):
+                continue
+            revenue_value = item.get("revenue")
+            try:
+                numeric_value = float(revenue_value or 0)
+            except Exception:
+                numeric_value = 0.0
+            values.append(max(numeric_value, 0.0))
+            labels.append(_short_period_label(item.get("period")))
+
+        if values:
+            chart_width = 520
+            chart_height = 180
+            left_pad = 22
+            right_pad = 14
+            top_pad = 16
+            bottom_pad = 42
+
+            plot_width = chart_width - left_pad - right_pad
+            plot_height = chart_height - top_pad - bottom_pad
+
+            max_value = max(values) or 1.0
+            count = len(values)
+            gap = 10
+            bar_width = max(18, int((plot_width - (gap * (count - 1))) / max(count, 1)))
+
+            bars_svg = ""
+            labels_svg = ""
+
+            for idx, value in enumerate(values):
+                bar_height = 0 if max_value == 0 else (value / max_value) * plot_height
+                x = left_pad + idx * (bar_width + gap)
+                y = top_pad + (plot_height - bar_height)
+                label_x = x + (bar_width / 2)
+
+                bars_svg += f'''
+                    <rect x="{x:.1f}" y="{y:.1f}" width="{bar_width}" height="{bar_height:.1f}"
+                          rx="6" ry="6" fill="#10B981" fill-opacity="0.90" />
+                '''
+
+                labels_svg += f'''
+                    <text x="{label_x:.1f}" y="{chart_height - 16}" text-anchor="middle"
+                          font-size="10" fill="#94A3B8">{html_escape(labels[idx])}</text>
+                '''
+
+            chart_panel_html = f"""
+                <div class="chart-wrap">
+                  <svg viewBox="0 0 {chart_width} {chart_height}" class="trend-chart" role="img" aria-label="Revenue trend chart">
+                    <line x1="{left_pad}" y1="{top_pad + plot_height}" x2="{chart_width - right_pad}" y2="{top_pad + plot_height}"
+                          stroke="#1E293B" stroke-width="1" />
+                    {bars_svg}
+                    {labels_svg}
+                  </svg>
+                </div>
+            """
+
+    chart_subtitle = f"Recent revenue by {html_escape(revenue_grouping)}"
 
     return f"""
 <!DOCTYPE html>
@@ -949,7 +1030,7 @@ def build_dashboard_report_email_html(
       width: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }}
 
     .two-col td {{
@@ -1055,6 +1136,26 @@ def build_dashboard_report_email_html(
       padding: 14px 10px !important;
     }}
 
+    .bottom-row {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-bottom: 0;
+    }}
+
+    .bottom-row td {{
+      width: 50%;
+      vertical-align: top;
+    }}
+
+    .bottom-left {{
+      padding-right: 6px;
+    }}
+
+    .bottom-right {{
+      padding-left: 6px;
+    }}
+
     .insights-panel {{
       background: #0b1220;
       border: 1px solid #1e293b;
@@ -1101,6 +1202,38 @@ def build_dashboard_report_email_html(
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
+    }}
+
+    .chart-panel {{
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      overflow: hidden;
+      page-break-inside: avoid;
+      min-height: 100%;
+    }}
+
+    .chart-body {{
+      padding: 10px 12px 8px 12px;
+    }}
+
+    .chart-wrap {{
+      width: 100%;
+      height: 190px;
+    }}
+
+    .trend-chart {{
+      width: 100%;
+      height: 190px;
+      display: block;
+    }}
+
+    .empty-chart-state {{
+      padding: 70px 10px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 11px;
+      line-height: 1.4;
     }}
 
     .footer-inline {{
@@ -1176,15 +1309,32 @@ def build_dashboard_report_email_html(
           </tr>
         </table>
 
-        <div class="insights-panel">
-          <div class="panel-head">
-            <h2 class="panel-title">Key insights</h2>
-            <p class="panel-subtitle">Smart takeaways from your current dashboard view</p>
-          </div>
-          <div class="insights-body">
-            {insights_html}
-          </div>
-        </div>
+        <table class="bottom-row" role="presentation">
+          <tr>
+            <td class="bottom-left">
+              <div class="insights-panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Key insights</h2>
+                  <p class="panel-subtitle">Smart takeaways from your current dashboard view</p>
+                </div>
+                <div class="insights-body">
+                  {insights_html}
+                </div>
+              </div>
+            </td>
+            <td class="bottom-right">
+              <div class="chart-panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Revenue trend</h2>
+                  <p class="panel-subtitle">{chart_subtitle}</p>
+                </div>
+                <div class="chart-body">
+                  {chart_panel_html}
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
 
         <div class="footer-inline">
           Generated by Easy-dash.
