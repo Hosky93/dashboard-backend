@@ -614,9 +614,15 @@ def send_saved_view_report_email(
         dashboard_payload=dashboard_payload,
     )
 
+    try:
+        saved_mapping = json.loads(dashboard.mapping_json or "{}")
+    except Exception:
+        saved_mapping = {}
+
     email_body_html = build_dashboard_report_email_html(
         file_name=dashboard.file_name,
         dashboard_payload=dashboard_payload,
+        applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
     send_email_message(
@@ -756,6 +762,7 @@ def build_dashboard_report_email_text(
 def build_dashboard_report_email_html(
     file_name: str,
     dashboard_payload: Dict[str, Any],
+    applied_filters: Optional[Dict[str, Any]] = None,
 ) -> str:
     summary = dashboard_payload.get("summary", {}) or {}
     charts = dashboard_payload.get("charts", {}) or {}
@@ -858,7 +865,7 @@ def build_dashboard_report_email_html(
                 return text[-5:] if len(text) > 5 else text
 
         if grouping == "week":
-            return text.replace("2024-", "")[-7:]
+            return text[-7:] if len(text) > 7 else text
 
         if grouping == "month":
             try:
@@ -897,80 +904,114 @@ def build_dashboard_report_email_html(
             chart_height = 170
             left_pad = 18
             right_pad = 16
-            top_pad = 16
+            top_pad = 18
             bottom_pad = 34
 
             plot_width = chart_width - left_pad - right_pad
             plot_height = chart_height - top_pad - bottom_pad
             max_value = max(values) or 1.0
+            count = len(values)
+            gap = 8
+            bar_width = max(20, min(44, int((plot_width - (gap * max(count - 1, 0))) / max(count, 1))))
+            bars_total_width = (count * bar_width) + (gap * max(count - 1, 0))
+            start_x = left_pad + max(0, (plot_width - bars_total_width) / 2)
 
-            if len(values) == 1:
-                x_positions = [left_pad + (plot_width / 2)]
-            else:
-                step_x = plot_width / (len(values) - 1)
-                x_positions = [left_pad + (idx * step_x) for idx in range(len(values))]
-
-            y_positions = [
-                top_pad + (plot_height - ((value / max_value) * plot_height))
-                for value in values
-            ]
-
-            polyline_points = " ".join(
-                f"{x:.1f},{y:.1f}" for x, y in zip(x_positions, y_positions)
-            )
-
-            area_points = f"{left_pad:.1f},{top_pad + plot_height:.1f} " + polyline_points + f" {x_positions[-1]:.1f},{top_pad + plot_height:.1f}"
-
-            vertical_guides = ""
-            for x in x_positions:
-                vertical_guides += f'''
-                    <line x1="{x:.1f}" y1="{top_pad}" x2="{x:.1f}" y2="{top_pad + plot_height}"
-                          stroke="#0F172A" stroke-width="1" opacity="0.35" />
-                '''
-
-            horizontal_guides = ""
+            grid_lines = ""
             for step in range(3):
                 y = top_pad + (plot_height * step / 2)
-                horizontal_guides += f'''
+                grid_lines += f'''
                     <line x1="{left_pad}" y1="{y:.1f}" x2="{chart_width - right_pad}" y2="{y:.1f}"
                           stroke="#1E293B" stroke-width="1" opacity="0.55" />
                 '''
 
-            point_markers = ""
-            label_marks = ""
-            for idx, (x, y) in enumerate(zip(x_positions, y_positions)):
-                point_markers += f'''
-                    <circle cx="{x:.1f}" cy="{y:.1f}" r="3.6" fill="#10B981" stroke="#062B21" stroke-width="2" />
+            bars_svg = ""
+            labels_svg = ""
+
+            for idx, value in enumerate(values):
+                bar_height = 0 if max_value == 0 else (value / max_value) * plot_height
+                x = start_x + idx * (bar_width + gap)
+                y = top_pad + (plot_height - bar_height)
+                label_x = x + (bar_width / 2)
+
+                bars_svg += f'''
+                    <rect x="{x:.1f}" y="{y:.1f}" width="{bar_width}" height="{bar_height:.1f}"
+                          rx="6" ry="6" fill="#10B981" fill-opacity="0.92" />
                 '''
-                label_marks += f'''
-                    <text x="{x:.1f}" y="{chart_height - 12}" text-anchor="middle"
+
+                labels_svg += f'''
+                    <text x="{label_x:.1f}" y="{chart_height - 12}" text-anchor="middle"
                           font-size="9.5" fill="#94A3B8">{html_escape(labels[idx])}</text>
                 '''
 
-            latest_value_text = html_escape(format_email_money(values[-1], currency_symbol))
-
             chart_panel_html = f"""
-                <div class="chart-summary-row">
-                  <div class="chart-summary-label">Latest</div>
-                  <div class="chart-summary-value">{latest_value_text}</div>
-                </div>
                 <div class="chart-wrap">
                   <svg viewBox="0 0 {chart_width} {chart_height}" class="trend-chart" role="img" aria-label="Revenue trend chart">
-                    {horizontal_guides}
-                    {vertical_guides}
-                    <polygon points="{area_points}" fill="url(#trendFill)" opacity="0.32"></polygon>
-                    <polyline points="{polyline_points}" fill="none" stroke="#10B981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
-                    {point_markers}
-                    {label_marks}
-                    <defs>
-                      <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="#10B981" stop-opacity="0.50"></stop>
-                        <stop offset="100%" stop-color="#10B981" stop-opacity="0.04"></stop>
-                      </linearGradient>
-                    </defs>
+                    {grid_lines}
+                    <line x1="{left_pad}" y1="{top_pad + plot_height}" x2="{chart_width - right_pad}" y2="{top_pad + plot_height}"
+                          stroke="#1E293B" stroke-width="1" />
+                    {bars_svg}
+                    {labels_svg}
                   </svg>
                 </div>
             """
+
+    filters = applied_filters or {}
+
+    def _normalize_list(value: Any) -> List[str]:
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [v.strip() for v in value.split("|") if v.strip()]
+        return []
+
+    active_filters: List[Tuple[str, str]] = []
+
+    filter_start = str(filters.get("start_date") or filters.get("filter_start_date") or "").strip()
+    filter_end = str(filters.get("end_date") or filters.get("filter_end_date") or "").strip()
+    if filter_start or filter_end:
+        if filter_start and filter_end:
+            active_filters.append(("Date", f"{filter_start} → {filter_end}"))
+        elif filter_start:
+            active_filters.append(("Date", f"From {filter_start}"))
+        elif filter_end:
+            active_filters.append(("Date", f"Up to {filter_end}"))
+
+    selected_products = _normalize_list(filters.get("product") or filters.get("filter_product"))
+    if selected_products:
+        active_filters.append(("Product", ", ".join(selected_products[:3])))
+
+    selected_customers = _normalize_list(filters.get("customer") or filters.get("filter_customer"))
+    if selected_customers:
+        active_filters.append(("Customer", ", ".join(selected_customers[:3])))
+
+    comparison_enabled = bool(filters.get("comparison_enabled"))
+    comparison_mode = str(filters.get("comparison_mode") or "").strip()
+    comparison_preset = str(filters.get("comparison_preset") or "").strip()
+    if comparison_enabled:
+        if comparison_preset:
+            active_filters.append(("Compare", comparison_preset.replace("_", " ").title()))
+        elif comparison_mode and comparison_mode != "none":
+            active_filters.append(("Compare", comparison_mode.replace("_", " ").title()))
+
+    applied_filters_html = ""
+    if active_filters:
+        chips_html = ""
+        for label, value in active_filters:
+            chips_html += f"""
+                <div class="filter-chip">
+                  <span class="filter-chip-label">{html_escape(label)}:</span>
+                  <span class="filter-chip-value">{html_escape(value)}</span>
+                </div>
+            """
+
+        applied_filters_html = f"""
+          <div class="filters-panel">
+            <div class="filters-title">Applied filters</div>
+            <div class="filters-row">
+              {chips_html}
+            </div>
+          </div>
+        """
 
     chart_subtitle = f"Recent revenue by {html_escape(revenue_grouping)}"
 
@@ -1196,7 +1237,7 @@ def build_dashboard_report_email_html(
       width: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      margin-bottom: 0;
+      margin-bottom: 8px;
     }}
 
     .bottom-row td {{
@@ -1273,36 +1314,12 @@ def build_dashboard_report_email_html(
       padding: 8px 10px 8px 10px;
     }}
 
-    .chart-summary-row {{
-      display: table;
-      width: 100%;
-      margin-bottom: 6px;
-      padding: 0 2px;
-    }}
-
-    .chart-summary-label {{
-      display: table-cell;
-      color: #94a3b8;
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }}
-
-    .chart-summary-value {{
-      display: table-cell;
-      text-align: right;
-      color: #ffffff;
-      font-size: 12px;
-      font-weight: 700;
-    }}
-
     .chart-wrap {{
       width: 100%;
       height: 166px;
       border: 1px solid #162133;
       border-radius: 12px;
-      background: linear-gradient(180deg, rgba(15, 23, 42, 0.70) 0%, rgba(2, 6, 23, 0.95) 100%);
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(2, 6, 23, 0.98) 100%);
       padding: 4px;
     }}
 
@@ -1320,8 +1337,55 @@ def build_dashboard_report_email_html(
       line-height: 1.4;
     }}
 
+    .filters-panel {{
+      margin-top: 2px;
+      margin-bottom: 6px;
+      padding: 9px 10px;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      background: #0b1220;
+    }}
+
+    .filters-title {{
+      margin-bottom: 7px;
+      color: #94a3b8;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+
+    .filters-row {{
+      font-size: 0;
+    }}
+
+    .filter-chip {{
+      display: inline-block;
+      margin-right: 6px;
+      margin-bottom: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid #1f2937;
+      color: #cbd5e1;
+      font-size: 10px;
+      line-height: 1.2;
+      vertical-align: top;
+    }}
+
+    .filter-chip-label {{
+      color: #94a3b8;
+      font-weight: 700;
+      margin-right: 4px;
+    }}
+
+    .filter-chip-value {{
+      color: #ffffff;
+      font-weight: 600;
+    }}
+
     .footer-inline {{
-      margin-top: 6px;
+      margin-top: 4px;
       padding-top: 7px;
       border-top: 1px solid #1e293b;
       color: #94a3b8;
@@ -1419,6 +1483,8 @@ def build_dashboard_report_email_html(
             </td>
           </tr>
         </table>
+
+        {applied_filters_html}
 
         <div class="footer-inline">
           Generated by Easy-dash.
@@ -1785,9 +1851,15 @@ async def send_dashboard_report(
         dashboard_payload=dashboard_payload,
     )
 
+    try:
+        saved_mapping = json.loads(dashboard.mapping_json or "{}")
+    except Exception:
+        saved_mapping = {}
+
     email_body_html = build_dashboard_report_email_html(
         file_name=dashboard.file_name,
         dashboard_payload=dashboard_payload,
+        applied_filters=saved_mapping.get("filters", {}) or {},
     )
 
     send_email_message(
@@ -6300,9 +6372,15 @@ def download_dashboard_pdf(
     safe_filename = build_safe_pdf_filename(dashboard.file_name)
 
     try:
+        try:
+            saved_mapping = json.loads(dashboard.mapping_json or "{}")
+        except Exception:
+            saved_mapping = {}
+
         html_content = build_dashboard_report_email_html(
             file_name=dashboard.file_name,
             dashboard_payload=dashboard_payload,
+            applied_filters=saved_mapping.get("filters", {}) or {},
         )
 
         pdf_bytes = HTML(string=html_content).write_pdf()
@@ -6317,6 +6395,7 @@ def download_dashboard_pdf(
             safe_filename,
             len(pdf_bytes),
         )
+
     except Exception:
         logger.exception(
             "WeasyPrint PDF generation failed for dashboard_id=%s user_id=%s. Falling back to ReportLab.",
