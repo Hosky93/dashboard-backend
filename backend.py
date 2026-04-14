@@ -776,71 +776,60 @@ def build_dashboard_report_email_html(
     top_customer_text = html_escape(top_customers[0].get("customer") if top_customers else "—")
     date_range_text = f"{date_range.get('start', '—')} to {date_range.get('end', '—')}"
 
-    top_products_html = ""
+    top_products_rows = ""
     if top_products:
-        for item in top_products:
+        for index, item in enumerate(top_products, start=1):
             product_name = html_escape(item.get("product") or "Unknown product")
             revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
-            top_products_html += f"""
+            top_products_rows += f"""
                 <tr>
-                    <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#e5e7eb;font-size:14px;">{product_name}</td>
-                    <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#ffffff;font-size:14px;font-weight:600;text-align:right;">{revenue_value}</td>
+                    <td class="rank">{index}</td>
+                    <td class="label-cell">{product_name}</td>
+                    <td class="value-cell">{revenue_value}</td>
                 </tr>
             """
     else:
-        top_products_html = """
+        top_products_rows = """
             <tr>
-                <td colspan="2" style="padding:14px;color:#94a3b8;font-size:14px;">No product data available</td>
+                <td colspan="3" class="empty-cell">No product data available</td>
             </tr>
         """
 
-    top_customers_html = ""
+    top_customers_rows = ""
     if top_customers:
-        for item in top_customers:
+        for index, item in enumerate(top_customers, start=1):
             customer_name = html_escape(item.get("customer") or "Unknown customer")
             revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
-            top_customers_html += f"""
+            top_customers_rows += f"""
                 <tr>
-                    <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#e5e7eb;font-size:14px;">{customer_name}</td>
-                    <td style="padding:12px 14px;border-bottom:1px solid #1e293b;color:#ffffff;font-size:14px;font-weight:600;text-align:right;">{revenue_value}</td>
+                    <td class="rank">{index}</td>
+                    <td class="label-cell">{customer_name}</td>
+                    <td class="value-cell">{revenue_value}</td>
                 </tr>
             """
     else:
-        top_customers_html = """
+        top_customers_rows = """
             <tr>
-                <td colspan="2" style="padding:14px;color:#94a3b8;font-size:14px;">No customer data available</td>
+                <td colspan="3" class="empty-cell">No customer data available</td>
             </tr>
         """
 
-    primary_insight_html = ""
-    secondary_insights_html = ""
-
+    insights_html = ""
     if email_insights:
-        top_insight = email_insights[0]
-        primary_insight_html = f"""
-            <div style="margin-bottom:16px;padding:18px;border:1px solid rgba(245,158,11,0.22);border-radius:18px;background:rgba(245,158,11,0.10);">
-              <div style="margin-bottom:8px;color:#fde68a;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Top insight</div>
-              <div style="margin-bottom:8px;color:#ffffff;font-size:18px;font-weight:700;">{html_escape(top_insight.get("title") or "Insight")}</div>
-              <div style="color:#f8fafc;font-size:14px;line-height:1.7;">{html_escape(top_insight.get("message") or "")}</div>
-            </div>
-        """
-
-        if len(email_insights) > 1:
-            for insight in email_insights[1:4]:
-                secondary_insights_html += f"""
-                    <div style="margin-bottom:12px;padding:14px 16px;border:1px solid #1f2937;border-radius:14px;background:#0f172a;color:#e5e7eb;">
-                        <div style="margin-bottom:6px;color:#cbd5e1;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                            {html_escape(insight.get("title") or "Insight")}
-                        </div>
-                        <div style="font-size:14px;line-height:1.6;">
-                            {html_escape(insight.get("message") or "")}
-                        </div>
-                    </div>
-                """
+        for index, insight in enumerate(email_insights):
+            title = html_escape(insight.get("title") or "Insight")
+            message = html_escape(insight.get("message") or "")
+            modifier_class = " insight-primary" if index == 0 else ""
+            insights_html += f"""
+                <div class="insight-card{modifier_class}">
+                    <div class="insight-title">{title}</div>
+                    <div class="insight-message">{message}</div>
+                </div>
+            """
     else:
-        primary_insight_html = """
-            <div style="padding:14px 16px;border:1px solid #1f2937;border-radius:14px;background:#0f172a;color:#94a3b8;font-size:14px;">
-                No insights available
+        insights_html = """
+            <div class="insight-card">
+                <div class="insight-message">No insights available</div>
             </div>
         """
 
@@ -849,96 +838,350 @@ def build_dashboard_report_email_html(
 <html>
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dashboard Report</title>
+  <title>Easy-dash Dashboard Report</title>
+  <style>
+    @page {{
+      size: A4;
+      margin: 14mm;
+    }}
+
+    * {{
+      box-sizing: border-box;
+    }}
+
+    body {{
+      margin: 0;
+      padding: 0;
+      background: #f8fafc;
+      color: #0f172a;
+      font-family: Arial, Helvetica, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }}
+
+    .page {{
+      width: 100%;
+    }}
+
+    .shell {{
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 20px;
+      overflow: hidden;
+    }}
+
+    .hero {{
+      background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
+      padding: 22px 24px 18px 24px;
+    }}
+
+    .badge {{
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.10);
+      border: 1px solid rgba(16, 185, 129, 0.30);
+      color: #a7f3d0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+
+    .hero h1 {{
+      margin: 14px 0 8px 0;
+      color: #ffffff;
+      font-size: 28px;
+      line-height: 1.15;
+      font-weight: 700;
+    }}
+
+    .hero .subtle {{
+      margin: 0;
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.5;
+    }}
+
+    .content {{
+      padding: 22px;
+    }}
+
+    .stats-grid {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 10px;
+      table-layout: fixed;
+      margin-bottom: 18px;
+    }}
+
+    .stats-grid td {{
+      vertical-align: top;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 14px;
+    }}
+
+    .stat-label {{
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }}
+
+    .stat-value {{
+      color: #0f172a;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.15;
+      word-break: break-word;
+    }}
+
+    .two-col {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-bottom: 18px;
+    }}
+
+    .two-col td {{
+      width: 50%;
+      vertical-align: top;
+    }}
+
+    .col-left {{
+      padding-right: 8px;
+    }}
+
+    .col-right {{
+      padding-left: 8px;
+    }}
+
+    .panel {{
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      overflow: hidden;
+      page-break-inside: avoid;
+    }}
+
+    .panel-head {{
+      padding: 16px 18px 12px 18px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #f8fafc;
+    }}
+
+    .panel-title {{
+      margin: 0;
+      color: #0f172a;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.2;
+    }}
+
+    .panel-subtitle {{
+      margin: 6px 0 0 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }}
+
+    .table-wrap {{
+      padding: 8px 12px 12px 12px;
+    }}
+
+    table.data-table {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 8px;
+      table-layout: fixed;
+    }}
+
+    .data-table td {{
+      background: #ffffff;
+      font-size: 13px;
+      padding: 10px 12px;
+      border-top: 1px solid #e2e8f0;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: middle;
+    }}
+
+    .data-table tr td:first-child {{
+      border-left: 1px solid #e2e8f0;
+      border-top-left-radius: 12px;
+      border-bottom-left-radius: 12px;
+    }}
+
+    .data-table tr td:last-child {{
+      border-right: 1px solid #e2e8f0;
+      border-top-right-radius: 12px;
+      border-bottom-right-radius: 12px;
+    }}
+
+    .rank {{
+      width: 36px;
+      text-align: center;
+      color: #64748b;
+      font-weight: 700;
+    }}
+
+    .label-cell {{
+      color: #0f172a;
+      font-weight: 600;
+      word-break: break-word;
+    }}
+
+    .value-cell {{
+      width: 110px;
+      text-align: right;
+      color: #0f172a;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+
+    .empty-cell {{
+      text-align: center;
+      color: #64748b;
+      padding: 16px 12px !important;
+    }}
+
+    .insights-panel {{
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      overflow: hidden;
+      page-break-inside: avoid;
+    }}
+
+    .insights-body {{
+      padding: 14px;
+    }}
+
+    .insight-card {{
+      margin-bottom: 12px;
+      padding: 14px 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      background: #f8fafc;
+      page-break-inside: avoid;
+    }}
+
+    .insight-card:last-child {{
+      margin-bottom: 0;
+    }}
+
+    .insight-card.insight-primary {{
+      background: #fff7ed;
+      border-color: #fdba74;
+    }}
+
+    .insight-title {{
+      margin-bottom: 6px;
+      color: #0f172a;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
+    }}
+
+    .insight-message {{
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.55;
+      word-break: break-word;
+    }}
+
+    .footer {{
+      padding: 14px 22px 18px 22px;
+      border-top: 1px solid #e2e8f0;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.5;
+      background: #f8fafc;
+    }}
+  </style>
 </head>
-<body style="margin:0;padding:0;background:#020617;font-family:Arial,Helvetica,sans-serif;">
-  <div style="margin:0;padding:32px 16px;background:#020617;">
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:820px;margin:0 auto;border-collapse:collapse;">
-      <tr>
-        <td style="padding:0;">
-          <div style="border:1px solid #1e293b;border-radius:24px;overflow:hidden;background:linear-gradient(135deg,#0f172a 0%,#020617 100%);box-shadow:0 0 30px rgba(0,0,0,0.35);">
-            <div style="padding:28px 28px 20px 28px;border-bottom:1px solid #1e293b;">
-              <div style="display:inline-block;padding:6px 12px;border-radius:999px;background:#10b9811a;border:1px solid #10b98133;color:#a7f3d0;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                Easy-dash
+<body>
+  <div class="page">
+    <div class="shell">
+      <div class="hero">
+        <div class="badge">Easy-dash</div>
+        <h1>Dashboard report</h1>
+        <p class="subtle">{html_escape(file_name)}</p>
+        <p class="subtle">Date range: {html_escape(date_range_text)}</p>
+      </div>
+
+      <div class="content">
+        <table class="stats-grid" role="presentation">
+          <tr>
+            <td>
+              <div class="stat-label">Total revenue</div>
+              <div class="stat-value">{html_escape(revenue_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Orders</div>
+              <div class="stat-value">{html_escape(orders_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Average order value</div>
+              <div class="stat-value">{html_escape(aov_text)}</div>
+            </td>
+            <td>
+              <div class="stat-label">Top customer</div>
+              <div class="stat-value">{top_customer_text}</div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="two-col" role="presentation">
+          <tr>
+            <td class="col-left">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Top products</h2>
+                  <p class="panel-subtitle">Highest-performing products by revenue</p>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table" role="presentation">
+                    {top_products_rows}
+                  </table>
+                </div>
               </div>
-              <h1 style="margin:16px 0 8px 0;color:#ffffff;font-size:28px;line-height:1.2;font-weight:700;">
-                Your dashboard report
-              </h1>
-              <p style="margin:0;color:#94a3b8;font-size:15px;line-height:1.6;">
-                {html_escape(file_name)}
-              </p>
-              <p style="margin:10px 0 0 0;color:#94a3b8;font-size:13px;">
-                Date range: {html_escape(date_range_text)}
-              </p>
-            </div>
-
-            <div style="padding:24px 28px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:22px;border-collapse:separate;border-spacing:12px 12px;">
-                <tr>
-                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
-                    <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Total revenue</div>
-                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(revenue_text)}</div>
-                  </td>
-                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
-                    <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Orders</div>
-                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(orders_text)}</div>
-                  </td>
-                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
-                    <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Average order value</div>
-                    <div style="color:#ffffff;font-size:24px;font-weight:700;">{html_escape(aov_text)}</div>
-                  </td>
-                  <td width="25%" style="padding:18px;border:1px solid #1e293b;border-radius:18px;background:#0b1220;">
-                    <div style="color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Top customer</div>
-                    <div style="color:#ffffff;font-size:20px;font-weight:700;">{top_customer_text}</div>
-                  </td>
-                </tr>
-              </table>
-
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:22px;border-collapse:separate;border-spacing:0 0;">
-                <tr>
-                  <td valign="top" width="50%" style="padding-right:8px;">
-                    <div style="border:1px solid #1e293b;border-radius:20px;background:#0b1220;overflow:hidden;">
-                      <div style="padding:18px 18px 14px 18px;border-bottom:1px solid #1e293b;">
-                        <h2 style="margin:0;color:#ffffff;font-size:20px;">Top products</h2>
-                        <p style="margin:6px 0 0 0;color:#94a3b8;font-size:13px;">Highest-performing products by revenue</p>
-                      </div>
-                      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-collapse:collapse;">
-                        {top_products_html}
-                      </table>
-                    </div>
-                  </td>
-                  <td valign="top" width="50%" style="padding-left:8px;">
-                    <div style="border:1px solid #1e293b;border-radius:20px;background:#0b1220;overflow:hidden;">
-                      <div style="padding:18px 18px 14px 18px;border-bottom:1px solid #1e293b;">
-                        <h2 style="margin:0;color:#ffffff;font-size:20px;">Top customers</h2>
-                        <p style="margin:6px 0 0 0;color:#94a3b8;font-size:13px;">Customer performance ranking</p>
-                      </div>
-                      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-collapse:collapse;">
-                        {top_customers_html}
-                      </table>
-                    </div>
-                  </td>
-                </tr>
-              </table>
-
-              <div style="border:1px solid #1e293b;border-radius:20px;background:#0b1220;padding:20px;">
-                <h2 style="margin:0 0 8px 0;color:#ffffff;font-size:20px;">Key insights</h2>
-                <p style="margin:0 0 18px 0;color:#94a3b8;font-size:13px;">Smart takeaways from your latest dashboard data</p>
-                {primary_insight_html}
-                {secondary_insights_html}
+            </td>
+            <td class="col-right">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 class="panel-title">Top customers</h2>
+                  <p class="panel-subtitle">Customer performance ranking</p>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table" role="presentation">
+                    {top_customers_rows}
+                  </table>
+                </div>
               </div>
-            </div>
+            </td>
+          </tr>
+        </table>
 
-            <div style="padding:18px 28px;border-top:1px solid #1e293b;background:#07101f;">
-              <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.6;">
-                Generated by Easy-dash.
-              </p>
-            </div>
+        <div class="insights-panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Key insights</h2>
+            <p class="panel-subtitle">Smart takeaways from your current dashboard view</p>
           </div>
-        </td>
-      </tr>
-    </table>
+          <div class="insights-body">
+            {insights_html}
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        Generated by Easy-dash.
+      </div>
+    </div>
   </div>
 </body>
 </html>
