@@ -871,9 +871,8 @@ def build_dashboard_report_email_html(
     }}
 
     .hero {{
-      background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
-      padding: 18px 20px 14px 20px;
-      border-bottom: 1px solid #1e293b;
+    background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+    padding: 16px 18px 12px 18px;
     }}
 
     .badge {{
@@ -904,9 +903,9 @@ def build_dashboard_report_email_html(
       line-height: 1.35;
     }}
 
-    .content {{
-      padding: 16px;
-    }}
+    .content {
+    padding: 14px;
+    }
 
     .stats-grid {{
       width: 100%;
@@ -916,13 +915,13 @@ def build_dashboard_report_email_html(
       margin-bottom: 14px;
     }}
 
-    .stats-grid td {{
-      vertical-align: top;
-      background: #0f172a;
-      border: 1px solid #1e293b;
-      border-radius: 14px;
-      padding: 12px;
-    }}
+    .stats-grid td {
+    vertical-align: top;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 14px;
+    padding: 10px;
+    }
 
     .stat-label {{
       color: #94a3b8;
@@ -1030,11 +1029,13 @@ def build_dashboard_report_email_html(
       font-weight: 700;
     }}
 
-    .label-cell {{
-      color: #e5e7eb;
-      font-weight: 600;
-      word-break: break-word;
-    }}
+    .label-cell {
+    color: #e5e7eb;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    }
 
     .value-cell {{
       width: 100px;
@@ -1088,12 +1089,15 @@ def build_dashboard_report_email_html(
       line-height: 1.25;
     }}
 
-    .insight-message {{
-      color: #cbd5e1;
-      font-size: 12px;
-      line-height: 1.4;
-      word-break: break-word;
-    }}
+    .insight-message {
+    color: #cbd5e1;
+    font-size: 12px;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    }
 
     .footer-inline {{
       margin-top: 10px;
