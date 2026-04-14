@@ -527,6 +527,20 @@ def html_escape(value: Any) -> str:
         .replace("'", "&#39;")
     )
 
+def safe_wrap_text(value: Any, chunk: int = 24) -> str:
+    """
+    Force-break long unbroken strings so PDFs never overflow.
+    """
+    text = html_escape(value)
+
+    if not text:
+        return ""
+
+    # Insert zero-width space every N chars
+    return "&#8203;".join(
+        text[i:i+chunk] for i in range(0, len(text), chunk)
+    )
+
 def normalize_currency_symbol(symbol: Optional[str]) -> str:
     symbol = (symbol or "").strip()
     if symbol in {"£", "$", "€", "¥"}:
@@ -850,7 +864,7 @@ def build_dashboard_report_email_html(
     top_products_rows = ""
     if top_products:
         for index, item in enumerate(top_products, start=1):
-            product_name = html_escape(item.get("product") or "Unknown product")
+            product_name = safe_wrap_text(item.get("product") or "Unknown product")
             revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
             top_products_rows += f"""
                 <tr>
@@ -875,7 +889,7 @@ def build_dashboard_report_email_html(
     top_customers_rows = ""
     if top_customers:
         for index, item in enumerate(top_customers, start=1):
-            customer_name = html_escape(item.get("customer") or "Unknown customer")
+            customer_name = safe_wrap_text(item.get("customer") or "Unknown customer")
             revenue_value = html_escape(format_email_money(item.get("revenue"), currency_symbol))
             top_customers_rows += f"""
                 <tr>
@@ -5555,7 +5569,14 @@ def analyze_sales(
 
     # --- 2. Product concentration / standout performance ---
     top_products = charts.get("top_products", []) or []
-    if top_products:
+    product_filter_values = (
+        filtered_df[product_col].dropna().astype(str).str.strip().unique().tolist()
+        if product_col and product_col in filtered_df.columns
+        else []
+    )
+    is_single_product_view = len(product_filter_values) == 1
+
+    if top_products and not is_single_product_view:
         top_product = top_products[0]
         top_product_name = top_product.get("product", "Top product")
         top_product_share = float(top_product.get("share_of_total", 0) or 0)
@@ -5577,9 +5598,9 @@ def analyze_sales(
             add_smart_insight(
                 title="Leading product",
                 message=scoped_message(
-                f"{top_product_name} is your strongest product, contributing {top_product_share:.1f}% of revenue.",
-                f"Within this filtered view, {top_product_name} contributes {top_product_share:.1f}% of revenue.",
-            ),
+                    f"{top_product_name} is your strongest product, contributing {top_product_share:.1f}% of revenue.",
+                    f"Within this filtered view, {top_product_name} contributes {top_product_share:.1f}% of revenue.",
+                ),
                 severity="positive",
                 priority=68,
                 category="highlight",
@@ -5602,10 +5623,28 @@ def analyze_sales(
                     why_it_matters="A standout product often explains a large share of overall performance.",
                     suggested_action="Understand what makes it win and whether those patterns can be applied elsewhere.",
                 )
+    elif is_single_product_view:
+        focused_product_name = product_filter_values[0]
+        add_smart_insight(
+            title="Focused product view",
+            message=f"You are currently viewing a single product: {focused_product_name}. Product share insights are hidden in this focused view.",
+            severity="info",
+            priority=63,
+            category="summary",
+            why_it_matters="Share-of-revenue insights become less useful when the view is already narrowed to one product.",
+            suggested_action="Clear the product filter to compare this product against the wider product mix.",
+        )
 
     # --- 3. Customer concentration / dependency ---
     top_customers = charts.get("top_customers", []) or []
-    if top_customers:
+    customer_filter_values = (
+        filtered_df[customer_col].dropna().astype(str).str.strip().unique().tolist()
+        if customer_col and customer_col in filtered_df.columns
+        else []
+    )
+    is_single_customer_view = len(customer_filter_values) == 1
+
+    if top_customers and not is_single_customer_view:
         top_customer = top_customers[0]
         top_customer_name = top_customer.get("customer", "Top customer")
         top_customer_share = float(top_customer.get("share_of_total", 0) or 0)
@@ -5636,6 +5675,17 @@ def analyze_sales(
                 why_it_matters="This customer has an outsized influence on business performance.",
                 suggested_action="Monitor this account closely and look for ways to reduce over-reliance over time.",
             )
+    elif is_single_customer_view:
+        focused_customer_name = customer_filter_values[0]
+        add_smart_insight(
+            title="Focused customer view",
+            message=f"You are currently viewing a single customer: {focused_customer_name}. Customer share insights are hidden in this focused view.",
+            severity="info",
+            priority=65,
+            category="summary",
+            why_it_matters="Share-of-revenue insights become less useful when the view is already narrowed to one customer.",
+            suggested_action="Clear the customer filter to compare this customer against the wider customer base.",
+        )
 
     # --- 4. Recent trend direction ---
     revenue_over_time = charts.get("revenue_over_time", {}) or {}
