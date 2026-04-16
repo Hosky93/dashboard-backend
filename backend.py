@@ -2709,6 +2709,12 @@ async def send_dashboard_report(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user_has_active_subscription(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Email Dashboard is available on Pro only.",
+        )
+
     recipient = (data.to_email or "").strip()
 
     if not recipient:
@@ -7343,6 +7349,12 @@ def download_dashboard_pdf(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user_has_active_subscription(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="PDF export is available on Pro only.",
+        )
+
     check_pdf_rate_limit(current_user.id)
 
     dashboard = (
