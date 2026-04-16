@@ -5569,11 +5569,15 @@ def analyze_sales(
 
     # --- 2. Product concentration / standout performance ---
     top_products = charts.get("top_products", []) or []
-    product_filter_values = (
-        filtered_df[product_col].dropna().astype(str).str.strip().unique().tolist()
-        if product_col and product_col in filtered_df.columns
-        else []
-    )
+
+    raw_selected_products = mapping.get("filter_product")
+    if isinstance(raw_selected_products, list):
+        product_filter_values = [str(v).strip() for v in raw_selected_products if str(v).strip()]
+    elif isinstance(raw_selected_products, str) and raw_selected_products.strip():
+        product_filter_values = [v.strip() for v in raw_selected_products.split("|") if v.strip()]
+    else:
+        product_filter_values = []
+
     is_single_product_view = len(product_filter_values) == 1
 
     if top_products and not is_single_product_view:
@@ -5637,11 +5641,15 @@ def analyze_sales(
 
     # --- 3. Customer concentration / dependency ---
     top_customers = charts.get("top_customers", []) or []
-    customer_filter_values = (
-        filtered_df[customer_col].dropna().astype(str).str.strip().unique().tolist()
-        if customer_col and customer_col in filtered_df.columns
-        else []
-    )
+
+    raw_selected_customers = mapping.get("filter_customer")
+    if isinstance(raw_selected_customers, list):
+        customer_filter_values = [str(v).strip() for v in raw_selected_customers if str(v).strip()]
+    elif isinstance(raw_selected_customers, str) and raw_selected_customers.strip():
+        customer_filter_values = [v.strip() for v in raw_selected_customers.split("|") if v.strip()]
+    else:
+        customer_filter_values = []
+
     is_single_customer_view = len(customer_filter_values) == 1
 
     if top_customers and not is_single_customer_view:
