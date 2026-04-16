@@ -89,7 +89,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 
 MAX_FILE_SIZE_MB = 10
 MAX_DASHBOARDS_PER_HOUR = 20
-FREE_PLAN_DASHBOARD_LIMIT = 3
+FREE_PLAN_DASHBOARD_LIMIT = 1
 FREE_PLAN_SAVED_VIEW_LIMIT = 3
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -3166,7 +3166,7 @@ async def save_dashboard(
         if existing_dashboard_count >= FREE_PLAN_DASHBOARD_LIMIT:
             raise HTTPException(
                 status_code=403,
-                detail=f"Free plans can save up to {FREE_PLAN_DASHBOARD_LIMIT} dashboards. Upgrade to Pro for unlimited dashboards.",
+                detail=f"Free plans can save up to {FREE_PLAN_DASHBOARD_LIMIT} dashboard. Upgrade to Pro for unlimited dashboards.",
             )
 
     stored_upload = TEMP_UPLOADS.get(upload_id)
