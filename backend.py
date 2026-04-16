@@ -3454,6 +3454,18 @@ async def delete_dashboard(
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found.")
 
+    saved_views = (
+        db.query(SavedView)
+        .filter(
+            SavedView.dashboard_id == dashboard_id,
+            SavedView.user_id == current_user.id,
+        )
+        .all()
+    )
+
+    for saved_view in saved_views:
+        db.delete(saved_view)
+
     db.delete(dashboard)
     db.commit()
 
