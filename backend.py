@@ -89,6 +89,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 
 MAX_FILE_SIZE_MB = 10
 MAX_DASHBOARDS_PER_HOUR = 20
+FREE_PLAN_DASHBOARD_LIMIT = 3
+FREE_PLAN_SAVED_VIEW_LIMIT = 3
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_URL = os.getenv(
@@ -3154,6 +3156,19 @@ async def save_dashboard(
     if not upload_id:
         raise HTTPException(status_code=400, detail="Missing upload id.")
 
+    if not user_has_active_subscription(current_user):
+        existing_dashboard_count = (
+            db.query(Dashboard)
+            .filter(Dashboard.user_id == current_user.id)
+            .count()
+        )
+
+        if existing_dashboard_count >= FREE_PLAN_DASHBOARD_LIMIT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free plans can save up to {FREE_PLAN_DASHBOARD_LIMIT} dashboards. Upgrade to Pro for unlimited dashboards.",
+            )
+
     stored_upload = TEMP_UPLOADS.get(upload_id)
     if not stored_upload:
         raise HTTPException(
@@ -3564,6 +3579,19 @@ async def create_saved_view(
 
     if not name:
         raise HTTPException(status_code=400, detail="View name is required.")
+
+    if not user_has_active_subscription(current_user):
+        existing_saved_view_count = (
+            db.query(SavedView)
+            .filter(SavedView.user_id == current_user.id)
+            .count()
+        )
+
+        if existing_saved_view_count >= FREE_PLAN_SAVED_VIEW_LIMIT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free plans can save up to {FREE_PLAN_SAVED_VIEW_LIMIT} views. Upgrade to Pro for unlimited saved views.",
+            )
 
     existing_view = (
         db.query(SavedView)
