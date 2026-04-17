@@ -2505,7 +2505,8 @@ def send_password_reset_email(user: User, raw_token: str) -> None:
 
 
 def user_has_active_subscription(user: User) -> bool:
-    return (user.subscription_status or "").strip().lower() == "active"
+    status_value = (user.subscription_status or "").strip().lower()
+    return status_value in {"active", "trialing"}
 
 
 async def get_current_user(
@@ -6167,6 +6168,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "subscription_status": current_user.subscription_status or "trial",
         "is_paid": user_has_active_subscription(current_user),
         "email_verified": bool(current_user.email_verified),
+        "has_stripe_customer": bool((current_user.stripe_customer_id or "").strip()),
     }
 
 # =============================================================
@@ -6224,6 +6226,101 @@ def create_checkout_session(
     except Exception as exc:
         logger.exception("Failed to create Stripe checkout session for user_id=%s", current_user.id)
         raise HTTPException(status_code=500, detail=f"Failed to start checkout: {exc}")
+
+
+@app.post("/billing/create-portal-session")
+def create_portal_session(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe billing is not configured on the server.",
+        )
+
+    stripe_customer_id = (current_user.stripe_customer_id or "").strip()
+
+    if stripe_customer_id:
+        try:
+            stripe.Customer.retrieve(stripe_customer_id)
+        except Exception:
+            logger.warning(
+                "Stored Stripe customer id %s was invalid for user_id=%s. Recreating customer before portal session.",
+                stripe_customer_id,
+                current_user.id,
+            )
+            stripe_customer_id = ""
+
+    if not stripe_customer_id:
+        if not user_has_active_subscription(current_user):
+            raise HTTPException(
+                status_code=400,
+                detail="No billing account was found for this user yet.",
+            )
+
+        customer = stripe.Customer.create(email=current_user.email)
+        stripe_customer_id = customer["id"]
+        current_user.stripe_customer_id = stripe_customer_id
+        db.add(current_user)
+        db.commit()
+        db.refresh(current_user)
+
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            payment_method_types=["card"],
+            customer=stripe_customer_id,
+            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
+            success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}",
+            cancel_url=f"{FRONTEND_BASE_URL}{STRIPE_CANCEL_PATH}",
+        )
+        return {"checkout_url": session.url}
+    except Exception as exc:
+        logger.exception("Failed to create Stripe checkout session for user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail=f"Failed to start checkout: {exc}")
+
+
+@app.post("/billing/create-portal-session")
+def create_portal_session(
+    current_user: User = Depends(get_current_user),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe billing is not configured on the server.",
+        )
+
+    stripe_customer_id = (current_user.stripe_customer_id or "").strip()
+
+    if not stripe_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Billing management is unavailable for this account because it is not linked to a Stripe subscription.",
+        )
+
+    try:
+        stripe.Customer.retrieve(stripe_customer_id)
+    except Exception:
+        logger.warning(
+            "Stripe billing portal blocked because stored customer id was invalid for user_id=%s",
+            current_user.id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Billing management is unavailable for this account because its Stripe billing record could not be found.",
+        )
+
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=stripe_customer_id,
+            return_url=f"{FRONTEND_BASE_URL}/dashboards",
+        )
+        return {"portal_url": session.url}
+    except Exception as exc:
+        logger.exception("Failed to create Stripe billing portal session for user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail=f"Failed to open billing portal: {exc}")
+
 
 @app.post("/billing/webhook")
 async def stripe_webhook(
