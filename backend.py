@@ -6190,9 +6190,23 @@ def create_checkout_session(
             detail="Your account is already on a paid plan.",
         )
 
-    if not current_user.stripe_customer_id:
+    stripe_customer_id = (current_user.stripe_customer_id or "").strip()
+
+    if stripe_customer_id:
+        try:
+            stripe.Customer.retrieve(stripe_customer_id)
+        except Exception:
+            logger.warning(
+                "Stored Stripe customer id %s was invalid for user_id=%s. Creating a new customer.",
+                stripe_customer_id,
+                current_user.id,
+            )
+            stripe_customer_id = ""
+
+    if not stripe_customer_id:
         customer = stripe.Customer.create(email=current_user.email)
-        current_user.stripe_customer_id = customer["id"]
+        stripe_customer_id = customer["id"]
+        current_user.stripe_customer_id = stripe_customer_id
         db.add(current_user)
         db.commit()
         db.refresh(current_user)
@@ -6201,7 +6215,7 @@ def create_checkout_session(
         session = stripe.checkout.Session.create(
             mode="subscription",
             payment_method_types=["card"],
-            customer=current_user.stripe_customer_id,
+            customer=stripe_customer_id,
             line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
             success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}",
             cancel_url=f"{FRONTEND_BASE_URL}{STRIPE_CANCEL_PATH}",
