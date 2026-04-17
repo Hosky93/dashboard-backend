@@ -6219,7 +6219,7 @@ def create_checkout_session(
             payment_method_types=["card"],
             customer=stripe_customer_id,
             line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-            success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}",
+            success_url=f"{FRONTEND_BASE_URL}{STRIPE_SUCCESS_PATH}?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{FRONTEND_BASE_URL}{STRIPE_CANCEL_PATH}",
         )
         return {"checkout_url": session.url}
@@ -6321,6 +6321,70 @@ def create_portal_session(
         logger.exception("Failed to create Stripe billing portal session for user_id=%s", current_user.id)
         raise HTTPException(status_code=500, detail=f"Failed to open billing portal: {exc}")
 
+
+@app.get("/billing/checkout-status")
+def get_checkout_status(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe billing is not configured on the server.",
+        )
+
+    session_id = (session_id or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required.")
+
+    try:
+        checkout_session = stripe.checkout.Session.retrieve(session_id)
+    except Exception as exc:
+        logger.exception("Failed to retrieve Stripe checkout session %s", session_id)
+        raise HTTPException(status_code=400, detail=f"Failed to verify checkout session: {exc}")
+
+    session_customer_id = (checkout_session.get("customer") or "").strip()
+    payment_status = (checkout_session.get("payment_status") or "").strip().lower()
+    checkout_status = (checkout_session.get("status") or "").strip().lower()
+
+    if not session_customer_id:
+        raise HTTPException(status_code=400, detail="Checkout session did not include a customer.")
+
+    stored_customer_id = (current_user.stripe_customer_id or "").strip()
+    if stored_customer_id and stored_customer_id != session_customer_id:
+        raise HTTPException(status_code=403, detail="This checkout session does not belong to the current user.")
+
+    if not stored_customer_id:
+        current_user.stripe_customer_id = session_customer_id
+
+    subscription_status = "trial"
+    try:
+        subscriptions = stripe.Subscription.list(customer=session_customer_id, limit=1)
+        subscription_items = subscriptions.get("data") or []
+        if subscription_items:
+            subscription_status = (subscription_items[0].get("status") or "trial").strip().lower()
+    except Exception:
+        logger.exception(
+            "Failed to fetch Stripe subscription status for customer %s during checkout reconciliation.",
+            session_customer_id,
+        )
+
+    if subscription_status in {"active", "trialing"}:
+        current_user.subscription_status = subscription_status
+    elif checkout_status == "complete" and payment_status in {"paid", "no_payment_required"}:
+        current_user.subscription_status = "active"
+
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+
+    return {
+        "status": "success",
+        "subscription_status": current_user.subscription_status or "trial",
+        "is_paid": user_has_active_subscription(current_user),
+        "stripe_customer_id": current_user.stripe_customer_id,
+    }
 
 @app.post("/billing/webhook")
 async def stripe_webhook(
