@@ -85,8 +85,14 @@ ROW_ALT = "#F9FAFB"
 # =============================================================
 
 SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
-if not SECRET_KEY or SECRET_KEY == "dev_only_change_me":
-    raise RuntimeError("SECRET_KEY must be set to a strong random value in the environment.")
+ENV = os.getenv("ENV", "development").strip().lower()
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY must be set in the environment.")
+
+if ENV == "production" and SECRET_KEY == "dev_only_change_me":
+    raise RuntimeError("SECRET_KEY cannot use a development placeholder in production.")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
@@ -3002,6 +3008,8 @@ async def upload_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    check_rate_limit(current_user.id)
+
     if hasattr(file, "size") and file.size and file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large.")
 
