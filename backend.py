@@ -83,7 +83,9 @@ ROW_ALT = "#F9FAFB"
 # CONFIG
 # =============================================================
 
-SECRET_KEY = os.getenv("SECRET_KEY", "").strip() or "dev_only_change_me"
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY or SECRET_KEY == "dev_only_change_me":
+    raise RuntimeError("SECRET_KEY must be set to a strong random value in the environment.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
@@ -157,9 +159,6 @@ class TestEmailRequest(BaseModel):
 class SendDashboardReportRequest(BaseModel):
     to_email: str
     dashboard_id: int
-
-class PromoteTestUserRequest(BaseModel):
-    email: str
 
 class User(Base):
     __tablename__ = "users"
@@ -270,14 +269,7 @@ def run_migrations():
         except Exception:
             pass
 
-        # Ensure your test user still works
-        try:
-            conn.execute(
-                text("UPDATE users SET email_verified = 1 WHERE email = :email"),
-                {"email": "live5@test.com"}
-            )
-        except Exception:
-            pass
+        # No test-account exceptions in production migrations.
 
 run_migrations()
 
@@ -336,11 +328,7 @@ def run_safe_migrations() -> None:
             if "password_reset_expires_at" not in existing_user_columns:
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_reset_expires_at TIMESTAMP")
 
-            conn.exec_driver_sql("""
-                UPDATE users
-                SET email_verified = TRUE
-                WHERE email = 'live5@test.com'
-            """)
+            # No test-account exceptions in production safe migrations.
 
             if DATABASE_URL.startswith("sqlite"):
                 conn.exec_driver_sql("""
@@ -2681,22 +2669,24 @@ async def send_test_email(
     data: TestEmailRequest,
     current_user: User = Depends(get_current_user),
 ):
+    require_admin(current_user)
+
     recipient = (data.to_email or "").strip()
 
     if not recipient:
         raise HTTPException(status_code=400, detail="Recipient email is required.")
 
     send_email_message(
-    to_email=recipient,
-    subject="Dashboard Reports - Test Email",
-    body_text=(
-        f"Hello,\n\n"
-        f"This is a test email from Dashboard Reports.\n\n"
-        f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
-        f"If you received this, your email sending is working."
-    ),
-    from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
-    from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
+        to_email=recipient,
+        subject="Dashboard Reports - Test Email",
+        body_text=(
+            f"Hello,\n\n"
+            f"This is a test email from Dashboard Reports.\n\n"
+            f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+            f"If you received this, your email sending is working."
+        ),
+        from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+        from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
     )
 
     return {
@@ -2800,27 +2790,20 @@ async def send_dashboard_report(
 
 @app.post("/reports/run-scheduled")
 async def run_scheduled_reports(
-    request: Request,
     db: Session = Depends(get_db),
     x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
 ):
-    auth_header = request.headers.get("authorization", "").strip()
-    is_user_request = auth_header.lower().startswith("bearer ")
+    if not REPORTS_CRON_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="REPORTS_CRON_SECRET is not configured on the server.",
+        )
 
-    if is_user_request:
-        await get_current_user(token=auth_header.split(" ", 1)[1], db=db)
-    else:
-        if not REPORTS_CRON_SECRET:
-            raise HTTPException(
-                status_code=500,
-                detail="REPORTS_CRON_SECRET is not configured on the server.",
-            )
-
-        if x_cron_secret != REPORTS_CRON_SECRET:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid cron secret.",
-            )
+    if x_cron_secret != REPORTS_CRON_SECRET:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid cron secret.",
+        )
 
     now_utc = datetime.utcnow()
 
