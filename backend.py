@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response
 from weasyprint import HTML
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uuid import uuid4
 import hashlib
 import secrets
@@ -2639,11 +2640,34 @@ def build_schema_fingerprint(columns: List[str]) -> str:
     normalized.sort()
     return "|".join(normalized)
 
+def validate_uploaded_filename(filename: str) -> str:
+    cleaned = (filename or "").strip()
+
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Uploaded file has no name.")
+
+    if len(cleaned) > 200:
+        raise HTTPException(status_code=400, detail="Uploaded file name is too long.")
+
+    if "/" in cleaned or "\\" in cleaned or "\x00" in cleaned:
+        raise HTTPException(status_code=400, detail="Invalid uploaded file name.")
+
+    return cleaned
+
 # =============================================================
 # APP INIT
 # =============================================================
 
 app = FastAPI(title="Small Business Insights SaaS API - REANALYZE LIVE")
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[
+        "dashboard-backend-frc2.onrender.com",
+        "localhost",
+        "127.0.0.1",
+    ],
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -2654,9 +2678,20 @@ app.add_middleware(
         "https://www.easy-dash.io",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/health")
@@ -2705,6 +2740,8 @@ async def send_dashboard_report(
             status_code=403,
             detail="Email Dashboard is available on Pro only.",
         )
+
+    check_pdf_rate_limit(current_user.id, max_per_hour=20)
 
     recipient = (data.to_email or "").strip()
 
@@ -6450,11 +6487,18 @@ async def stripe_webhook(
     return {"received": True}
 
 @app.post("/dashboard/preview")
-async def dashboard_preview(file: UploadFile = File(...)):
+async def dashboard_preview(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    check_rate_limit(current_user.id)
+
+    filename = validate_uploaded_filename(file.filename or "")
+
     if hasattr(file, "size") and file.size and file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large.")
 
-    if not file.filename.endswith((".csv", ".xlsx")):
+    if not filename.endswith((".csv", ".xlsx")):
         return JSONResponse(
             status_code=400,
             content={"error": "Please upload a .csv or .xlsx file."},
@@ -6542,23 +6586,21 @@ async def dashboard_generate(
         logger.warning("User %s submitted request without file.", current_user.id)
         raise HTTPException(status_code=400, detail="No file was uploaded.")
 
-    if not file.filename:
-        logger.warning("User %s uploaded a file with no name.", current_user.id)
-        raise HTTPException(status_code=400, detail="Uploaded file has no name.")
+    filename = validate_uploaded_filename(file.filename or "")
 
     if hasattr(file, "size") and file.size and file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
         logger.warning(
             "User %s uploaded file '%s' exceeding size limit.",
             current_user.id,
-            file.filename,
+            filename,
         )
         raise HTTPException(status_code=400, detail="File too large.")
 
-    if not file.filename.endswith((".csv", ".xlsx")):
+    if not filename.endswith((".csv", ".xlsx")):
         logger.warning(
             "User %s uploaded unsupported file type '%s'.",
             current_user.id,
-            file.filename,
+            filename,
         )
         raise HTTPException(
             status_code=400,
@@ -6568,7 +6610,7 @@ async def dashboard_generate(
     logger.info(
         "User %s started dashboard generation for file '%s'.",
         current_user.id,
-        file.filename,
+        filename,
     )
 
     # ----- Validate & normalise time_grouping -----
