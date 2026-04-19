@@ -863,14 +863,19 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                             daily[day]["requests"] += int(r.get("count") or 0)
                             daily[day]["visits"] += int(((r.get("sum") or {}).get("visits")) or 0)
 
-                        trend_points = [
-                            {
+                        # build full 7-day window (fills missing days)
+                        full_trend = []
+                        for i in range(7):
+                            day = (datetime.utcnow() - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+                            values = daily.get(day, {"requests": 0, "visits": 0})
+
+                            full_trend.append({
                                 "date": day,
                                 "requests": values["requests"],
                                 "visits": values["visits"],
-                            }
-                            for day, values in sorted(daily.items())
-                        ]
+                            })
+
+                        trend_points = full_trend
             except Exception:
                 logger.exception("Cloudflare hourly fallback trend query failed.")
 
