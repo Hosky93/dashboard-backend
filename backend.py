@@ -898,14 +898,20 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                     daily[day]["requests"] += 1
                     daily[day]["visits"] += 1
 
-                trend_points = [
-                    {
-                        "date": day,
-                        "requests": values["requests"],
-                        "visits": values["visits"],
-                    }
-                    for day, values in sorted(daily.items())
-                ]
+                full_trend = []
+                for i in range(7):
+                    day = (datetime.utcnow() - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+                    values = daily.get(day, {"requests": 0, "visits": 0})
+
+                    full_trend.append(
+                        {
+                            "date": day,
+                            "requests": values["requests"],
+                            "visits": values["visits"],
+                        }
+                    )
+
+                trend_points = full_trend
             except Exception:
                 logger.exception("Internal traffic fallback failed.")
             finally:
