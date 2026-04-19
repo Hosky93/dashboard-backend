@@ -726,20 +726,19 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
         query GetZoneTrafficTrend($zoneTag: string, $start: Time, $end: Time) {
           viewer {
             zones(filter: { zoneTag: $zoneTag }) {
-              traffic: httpRequestsAdaptiveGroups(
+              traffic: httpRequests1dGroups(
                 limit: 7
-                orderBy: [datetime_ASC]
+                orderBy: [date_ASC]
                 filter: {
-                  datetime_geq: $start
-                  datetime_lt: $end
-                  requestSource: "eyeball"
+                  date_geq: $start
+                  date_lt: $end
                 }
               ) {
                 dimensions {
-                  datetime
+                  date
                 }
-                count
                 sum {
+                  requests
                   visits
                 }
               }
@@ -748,7 +747,8 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
         }
         """
 
-        trend_start = now - timedelta(days=7)
+        trend_start = (now - timedelta(days=7)).date().isoformat()
+        trend_end = now.date().isoformat()
 
         trend_response = requests.post(
             CLOUDFLARE_GRAPHQL_URL,
@@ -760,25 +760,29 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                 "query": trend_query,
                 "variables": {
                     "zoneTag": CLOUDFLARE_ZONE_ID,
-                    "start": trend_start.isoformat() + "Z",
-                    "end": now.isoformat() + "Z",
+                    "start": trend_start,
+                    "end": trend_end,
                 },
             },
             timeout=20,
         )
 
+        trend_response.raise_for_status()
         trend_data = trend_response.json()
 
         trend_points = []
-        zones_trend = (((trend_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
-        if zones_trend:
-            rows = zones_trend[0].get("traffic") or []
-            for r in rows:
-                trend_points.append({
-                    "date": (r.get("dimensions") or {}).get("datetime"),
-                    "requests": int(r.get("count") or 0),
-                    "visits": int(((r.get("sum") or {}).get("visits")) or 0),
-                })
+        if trend_data.get("errors"):
+            logger.warning("Cloudflare trend query returned errors: %s", trend_data.get("errors"))
+        else:
+            zones_trend = (((trend_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
+            if zones_trend:
+                rows = zones_trend[0].get("traffic") or []
+                for r in rows:
+                    trend_points.append({
+                        "date": (r.get("dimensions") or {}).get("date"),
+                        "requests": int(((r.get("sum") or {}).get("requests")) or 0),
+                        "visits": int(((r.get("sum") or {}).get("visits")) or 0),
+                    })
 
         return {
             "connected": True,
