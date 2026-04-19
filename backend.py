@@ -3952,6 +3952,58 @@ def admin_get_user_dashboards(
         ],
     }
 
+@app.get("/admin/stats")
+def admin_get_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    now = datetime.utcnow()
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+    last_30d = now - timedelta(days=30)
+
+    total_users = db.query(User).count()
+    verified_users = db.query(User).filter(User.email_verified == True).count()
+    active_paid_users = db.query(User).filter(User.subscription_status == "active").count()
+    trial_users = db.query(User).filter(User.subscription_status == "trial").count()
+    canceled_users = db.query(User).filter(User.subscription_status == "canceled").count()
+
+    total_dashboards = db.query(Dashboard).count()
+    total_saved_views = db.query(SavedView).count()
+
+    new_users_24h = db.query(User).filter(User.created_at >= last_24h).count()
+    new_users_7d = db.query(User).filter(User.created_at >= last_7d).count()
+    new_users_30d = db.query(User).filter(User.created_at >= last_30d).count()
+
+    dashboards_24h = db.query(Dashboard).filter(Dashboard.created_at >= last_24h).count()
+    dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
+    dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
+
+    return {
+        "generated_at": now.isoformat(),
+        "users": {
+            "total": total_users,
+            "verified": verified_users,
+            "active_paid": active_paid_users,
+            "trial": trial_users,
+            "canceled": canceled_users,
+            "new_last_24h": new_users_24h,
+            "new_last_7d": new_users_7d,
+            "new_last_30d": new_users_30d,
+        },
+        "dashboards": {
+            "total": total_dashboards,
+            "created_last_24h": dashboards_24h,
+            "created_last_7d": dashboards_7d,
+            "created_last_30d": dashboards_30d,
+        },
+        "saved_views": {
+            "total": total_saved_views,
+        },
+    }
+
 def apply_dimension_filters(
     df,
     product_col=None,
