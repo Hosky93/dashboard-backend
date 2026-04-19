@@ -250,6 +250,13 @@ class SavedView(Base):
     last_report_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class TrafficEvent(Base):
+    __tablename__ = "traffic_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    path = Column(String, nullable=True)
+
 Base.metadata.create_all(bind=engine)
 
 from sqlalchemy import text
@@ -712,80 +719,86 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
 
         traffic_rows = (zones[0].get("traffic") or [])
         if not traffic_rows:
-                return {
-                    "connected": True,
-                    "source": "cloudflare",
-                    "requests_last_24h": int(traffic.get("count") or 0),
-                    "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
-                    "trend_7d": trend_points,
-                    "debug_trend_points_count": len(trend_points),
-                    "message": "Cloudflare traffic metrics loaded successfully.",
-                }
+            return {
+                "connected": True,
+                "source": "cloudflare",
+                "requests_last_24h": 0,
+                "visits_last_24h": 0,
+                "trend_7d": [],
+                "message": "No Cloudflare traffic data available for the last 24 hours.",
+            }
 
         traffic = traffic_rows[0]
-        # --- 7 day trend ---
-        trend_query = """
-        query GetZoneTrafficTrend($zoneTag: string, $start: Time, $end: Time) {
-          viewer {
-            zones(filter: { zoneTag: $zoneTag }) {
-              traffic: httpRequests1dGroups(
-                limit: 7
-                orderBy: [date_ASC]
-                filter: {
-                  date_geq: $start
-                  date_lt: $end
-                }
-              ) {
-                dimensions {
-                  date
-                }
-                sum {
-                  requests
-                  visits
+
+        trend_points = []
+
+        # First try Cloudflare daily trend
+        try:
+            trend_query = """
+            query GetZoneTrafficTrend($zoneTag: string, $start: Time, $end: Time) {
+              viewer {
+                zones(filter: { zoneTag: $zoneTag }) {
+                  traffic: httpRequests1dGroups(
+                    limit: 7
+                    orderBy: [date_ASC]
+                    filter: {
+                      date_geq: $start
+                      date_lt: $end
+                    }
+                  ) {
+                    dimensions {
+                      date
+                    }
+                    sum {
+                      requests
+                      visits
+                    }
+                  }
                 }
               }
             }
-          }
-        }
-        """
+            """
 
-        trend_start = (now - timedelta(days=7)).date().isoformat()
-        trend_end = now.date().isoformat()
+            trend_start = (now - timedelta(days=7)).date().isoformat()
+            trend_end = now.date().isoformat()
 
-        trend_response = requests.post(
-            CLOUDFLARE_GRAPHQL_URL,
-            headers={
-                "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "query": trend_query,
-                "variables": {
-                    "zoneTag": CLOUDFLARE_ZONE_ID,
-                    "start": trend_start,
-                    "end": trend_end,
+            trend_response = requests.post(
+                CLOUDFLARE_GRAPHQL_URL,
+                headers={
+                    "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                    "Content-Type": "application/json",
                 },
-            },
-            timeout=20,
-        )
+                json={
+                    "query": trend_query,
+                    "variables": {
+                        "zoneTag": CLOUDFLARE_ZONE_ID,
+                        "start": trend_start,
+                        "end": trend_end,
+                    },
+                },
+                timeout=20,
+            )
+            trend_response.raise_for_status()
+            trend_data = trend_response.json()
 
-        trend_response.raise_for_status()
-        trend_data = trend_response.json()
+            if trend_data.get("errors"):
+                logger.warning("Cloudflare trend query returned errors: %s", trend_data.get("errors"))
+            else:
+                zones_trend = (((trend_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
+                if zones_trend:
+                    rows = zones_trend[0].get("traffic") or []
+                    for r in rows:
+                        trend_points.append(
+                            {
+                                "date": (r.get("dimensions") or {}).get("date"),
+                                "requests": int(((r.get("sum") or {}).get("requests")) or 0),
+                                "visits": int(((r.get("sum") or {}).get("visits")) or 0),
+                            }
+                        )
+        except Exception:
+            logger.exception("Cloudflare daily trend query failed.")
 
-        trend_points = []
-        if trend_data.get("errors"):
-            logger.warning("Cloudflare trend query returned errors: %s", trend_data.get("errors"))
-        else:
-            zones_trend = (((trend_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
-            if zones_trend:
-                rows = zones_trend[0].get("traffic") or []
-                for r in rows:
-                    trend_points.append({
-                        "date": (r.get("dimensions") or {}).get("date"),
-                        "requests": int(((r.get("sum") or {}).get("requests")) or 0),
-                        "visits": int(((r.get("sum") or {}).get("visits")) or 0),
-                    })
-
+        # If daily trend is empty, try Cloudflare hourly fallback grouped into days
         if not trend_points:
             try:
                 hourly_query = """
@@ -846,7 +859,6 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                                 continue
 
                             day = dt[:10]
-
                             daily.setdefault(day, {"requests": 0, "visits": 0})
                             daily[day]["requests"] += int(r.get("count") or 0)
                             daily[day]["visits"] += int(((r.get("sum") or {}).get("visits")) or 0)
@@ -861,6 +873,41 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                         ]
             except Exception:
                 logger.exception("Cloudflare hourly fallback trend query failed.")
+
+        # Final fallback: use internal tracked traffic events
+        if not trend_points:
+            try:
+                db = SessionLocal()
+                seven_days_ago = datetime.utcnow() - timedelta(days=7)
+
+                rows = (
+                    db.query(TrafficEvent)
+                    .filter(TrafficEvent.created_at >= seven_days_ago)
+                    .all()
+                )
+
+                daily = {}
+                for r in rows:
+                    day = r.created_at.strftime("%Y-%m-%d")
+                    daily.setdefault(day, {"requests": 0, "visits": 0})
+                    daily[day]["requests"] += 1
+                    daily[day]["visits"] += 1
+
+                trend_points = [
+                    {
+                        "date": day,
+                        "requests": values["requests"],
+                        "visits": values["visits"],
+                    }
+                    for day, values in sorted(daily.items())
+                ]
+            except Exception:
+                logger.exception("Internal traffic fallback failed.")
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         return {
             "connected": True,
@@ -2910,6 +2957,26 @@ def validate_uploaded_filename(filename: str) -> str:
 # =============================================================
 
 app = FastAPI(title="Small Business Insights SaaS API - REANALYZE LIVE")
+
+@app.middleware("http")
+async def track_traffic(request: Request, call_next):
+    response = await call_next(request)
+
+    try:
+        db = SessionLocal()
+        db.add(TrafficEvent(
+            path=request.url.path
+        ))
+        db.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            db.close()
+        except:
+            pass
+
+    return response
 
 app.add_middleware(
     TrustedHostMiddleware,
