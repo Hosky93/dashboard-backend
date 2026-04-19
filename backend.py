@@ -712,13 +712,15 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
 
         traffic_rows = (zones[0].get("traffic") or [])
         if not traffic_rows:
-            return {
-                "connected": True,
-                "source": "cloudflare",
-                "requests_last_24h": 0,
-                "visits_last_24h": 0,
-                "message": "No Cloudflare traffic data available for the last 24 hours.",
-            }
+                return {
+                    "connected": True,
+                    "source": "cloudflare",
+                    "requests_last_24h": int(traffic.get("count") or 0),
+                    "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
+                    "trend_7d": trend_points,
+                    "debug_trend_points_count": len(trend_points),
+                    "message": "Cloudflare traffic metrics loaded successfully.",
+                }
 
         traffic = traffic_rows[0]
         # --- 7 day trend ---
