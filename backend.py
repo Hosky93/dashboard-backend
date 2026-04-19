@@ -122,6 +122,11 @@ EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Dashboard Reports").strip()
 EMAIL_SEND_TIMEOUT_SECONDS = int(os.getenv("EMAIL_SEND_TIMEOUT_SECONDS", "20"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "support@easy-dash.io").strip().lower()
 
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID", "").strip()
+CLOUDFLARE_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
+
 stripe.api_key = STRIPE_SECRET_KEY or None
 
 # =============================================================
@@ -633,6 +638,104 @@ def get_next_report_due_at(saved_view: SavedView) -> Optional[datetime]:
 
     return None
 
+def get_cloudflare_traffic_summary() -> Dict[str, Any]:
+    if not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ZONE_ID:
+        return {
+            "connected": False,
+            "source": "cloudflare",
+            "message": "Cloudflare traffic metrics not connected yet.",
+        }
+
+    now = datetime.utcnow()
+    start = now - timedelta(hours=24)
+
+    query = """
+    query GetZoneTraffic($zoneTag: string, $start: Time, $end: Time) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          traffic: httpRequestsAdaptiveGroups(
+            limit: 1
+            filter: {
+              datetime_geq: $start
+              datetime_lt: $end
+              requestSource: "eyeball"
+            }
+          ) {
+            count
+            sum {
+              visits
+            }
+          }
+        }
+      }
+    }
+    """
+
+    variables = {
+        "zoneTag": CLOUDFLARE_ZONE_ID,
+        "start": start.isoformat() + "Z",
+        "end": now.isoformat() + "Z",
+    }
+
+    try:
+        response = requests.post(
+            CLOUDFLARE_GRAPHQL_URL,
+            headers={
+                "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "variables": variables,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+
+        if payload.get("errors"):
+            logger.warning("Cloudflare GraphQL returned errors: %s", payload.get("errors"))
+            return {
+                "connected": False,
+                "source": "cloudflare",
+                "message": "Cloudflare traffic metrics returned an error.",
+            }
+
+        zones = (((payload.get("data") or {}).get("viewer") or {}).get("zones") or [])
+        if not zones:
+            return {
+                "connected": False,
+                "source": "cloudflare",
+                "message": "Cloudflare zone not found in analytics response.",
+            }
+
+        traffic_rows = (zones[0].get("traffic") or [])
+        if not traffic_rows:
+            return {
+                "connected": True,
+                "source": "cloudflare",
+                "requests_last_24h": 0,
+                "visits_last_24h": 0,
+                "message": "No Cloudflare traffic data available for the last 24 hours.",
+            }
+
+        traffic = traffic_rows[0]
+        return {
+            "connected": True,
+            "source": "cloudflare",
+            "requests_last_24h": int(traffic.get("count") or 0),
+            "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
+            "message": "Cloudflare traffic metrics loaded successfully.",
+        }
+
+    except Exception:
+        logger.exception("Failed to load Cloudflare traffic metrics.")
+        return {
+            "connected": False,
+            "source": "cloudflare",
+            "message": "Failed to load Cloudflare traffic metrics.",
+        }
 
 def send_saved_view_report_email(
     *,
@@ -4045,6 +4148,7 @@ def admin_get_overview(
     dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
 
     estimated_mrr_gbp = round(active_paid_users * pro_price_gbp, 2)
+    traffic_summary = get_cloudflare_traffic_summary()
 
     return {
         "generated_at": now.isoformat(),
@@ -4072,11 +4176,7 @@ def admin_get_overview(
             "estimated_mrr_gbp": estimated_mrr_gbp,
             "source": "database_estimate",
         },
-        "traffic": {
-            "connected": False,
-            "source": "cloudflare",
-            "message": "Cloudflare traffic metrics not connected yet.",
-        },
+        "traffic": traffic_summary,
     }
 
 def apply_dimension_filters(
