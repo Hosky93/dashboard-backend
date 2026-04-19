@@ -3957,9 +3957,18 @@ def admin_get_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_admin(current_user)
+    if (current_user.email or "").strip().lower() != ADMIN_EMAIL:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Admin only",
+                "current_user_email": (current_user.email or "").strip().lower(),
+                "admin_email": ADMIN_EMAIL,
+            },
+        )
 
     now = datetime.utcnow()
+    require_admin(current_user)
     last_24h = now - timedelta(hours=24)
     last_7d = now - timedelta(days=7)
     last_30d = now - timedelta(days=30)
@@ -4001,6 +4010,72 @@ def admin_get_stats(
         },
         "saved_views": {
             "total": total_saved_views,
+        },
+    }
+
+@app.get("/admin/overview")
+def admin_get_overview(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    now = datetime.utcnow()
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+    last_30d = now - timedelta(days=30)
+
+    pro_price_gbp = 14.99
+
+    total_users = db.query(User).count()
+    verified_users = db.query(User).filter(User.email_verified == True).count()
+    active_paid_users = db.query(User).filter(User.subscription_status == "active").count()
+    trial_users = db.query(User).filter(User.subscription_status == "trial").count()
+    canceled_users = db.query(User).filter(User.subscription_status == "canceled").count()
+
+    total_dashboards = db.query(Dashboard).count()
+    total_saved_views = db.query(SavedView).count()
+
+    new_users_24h = db.query(User).filter(User.created_at >= last_24h).count()
+    new_users_7d = db.query(User).filter(User.created_at >= last_7d).count()
+    new_users_30d = db.query(User).filter(User.created_at >= last_30d).count()
+
+    dashboards_24h = db.query(Dashboard).filter(Dashboard.created_at >= last_24h).count()
+    dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
+    dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
+
+    estimated_mrr_gbp = round(active_paid_users * pro_price_gbp, 2)
+
+    return {
+        "generated_at": now.isoformat(),
+        "users": {
+            "total": total_users,
+            "verified": verified_users,
+            "active_paid": active_paid_users,
+            "trial": trial_users,
+            "canceled": canceled_users,
+            "new_last_24h": new_users_24h,
+            "new_last_7d": new_users_7d,
+            "new_last_30d": new_users_30d,
+        },
+        "product_usage": {
+            "total_dashboards": total_dashboards,
+            "dashboards_created_last_24h": dashboards_24h,
+            "dashboards_created_last_7d": dashboards_7d,
+            "dashboards_created_last_30d": dashboards_30d,
+            "total_saved_views": total_saved_views,
+        },
+        "revenue": {
+            "currency": "GBP",
+            "plan_price_gbp": pro_price_gbp,
+            "active_paid_users": active_paid_users,
+            "estimated_mrr_gbp": estimated_mrr_gbp,
+            "source": "database_estimate",
+        },
+        "traffic": {
+            "connected": False,
+            "source": "cloudflare",
+            "message": "Cloudflare traffic metrics not connected yet.",
         },
     }
 
