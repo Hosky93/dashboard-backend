@@ -915,6 +915,7 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
             "requests_last_24h": int(traffic.get("count") or 0),
             "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
             "trend_7d": trend_points,
+            "debug_trend_count": len(trend_points),
             "message": "Cloudflare traffic metrics loaded successfully.",
         }
 
