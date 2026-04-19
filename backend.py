@@ -4150,6 +4150,9 @@ def admin_get_overview(
     estimated_mrr_gbp = round(active_paid_users * pro_price_gbp, 2)
     traffic_summary = get_cloudflare_traffic_summary()
 
+    visits_last_24h = int(traffic_summary.get("visits_last_24h") or 0)
+    signup_conversion_rate_24h = round((new_users_24h / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
+
     return {
         "generated_at": now.isoformat(),
         "users": {
@@ -4176,7 +4179,10 @@ def admin_get_overview(
             "estimated_mrr_gbp": estimated_mrr_gbp,
             "source": "database_estimate",
         },
-        "traffic": traffic_summary,
+        "traffic": {
+            **traffic_summary,
+            "signup_conversion_rate_24h": signup_conversion_rate_24h,
+        },
     }
 
 def apply_dimension_filters(
