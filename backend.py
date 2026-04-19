@@ -926,7 +926,6 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
             "requests_last_24h": int(traffic.get("count") or 0),
             "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
             "trend_7d": trend_points,
-            "debug_trend_count": len(trend_points),
             "message": "Cloudflare traffic metrics loaded successfully.",
         }
 
@@ -4374,6 +4373,10 @@ def admin_get_overview(
     visits_last_24h = int(traffic_summary.get("visits_last_24h") or 0)
     signup_conversion_rate_24h = round((new_users_24h / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
 
+    signup_conversion_rate_7d = round((new_users_7d / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
+    verification_rate_7d = round((verified_users / total_users) * 100, 2) if total_users > 0 else 0.0
+    paid_conversion_rate_7d = round((active_paid_users / verified_users) * 100, 2) if verified_users > 0 else 0.0
+
     top_pages_rows = (
         db.query(TrafficEvent.path)
         .filter(TrafficEvent.created_at >= last_7d)
@@ -4388,6 +4391,9 @@ def admin_get_overview(
         "/openapi.json",
         "/favicon",
         "/_next",
+        "/auth",
+        "/reports",
+        "/api",
     )
 
     page_counts: Dict[str, int] = {}
@@ -4436,6 +4442,17 @@ def admin_get_overview(
             **traffic_summary,
             "signup_conversion_rate_24h": signup_conversion_rate_24h,
             "top_pages_7d": top_pages,
+        },
+        "funnel": {
+            "visits_last_24h": visits_last_24h,
+            "signups_last_24h": new_users_24h,
+            "signups_last_7d": new_users_7d,
+            "verified_users_total": verified_users,
+            "paid_users_total": active_paid_users,
+            "visit_to_signup_rate_24h": signup_conversion_rate_24h,
+            "visit_to_signup_rate_7d": signup_conversion_rate_7d,
+            "signup_to_verified_rate_total": verification_rate_7d,
+            "verified_to_paid_rate_total": paid_conversion_rate_7d,
         },
     }
 
