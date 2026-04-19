@@ -4373,7 +4373,13 @@ def admin_get_overview(
     visits_last_24h = int(traffic_summary.get("visits_last_24h") or 0)
     signup_conversion_rate_24h = round((new_users_24h / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
 
-    signup_conversion_rate_7d = round((new_users_7d / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
+    visits_last_7d = sum((p.get("visits") or 0) for p in (traffic_summary.get("trend_7d") or []))
+
+    signup_conversion_rate_7d = (
+        round((new_users_7d / visits_last_7d) * 100, 2)
+        if visits_last_7d > 0
+        else 0.0
+    )
     verification_rate_7d = round((verified_users / total_users) * 100, 2) if total_users > 0 else 0.0
     paid_conversion_rate_7d = round((active_paid_users / verified_users) * 100, 2) if verified_users > 0 else 0.0
 
