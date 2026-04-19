@@ -721,11 +721,71 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
             }
 
         traffic = traffic_rows[0]
+        # --- 7 day trend ---
+        trend_query = """
+        query GetZoneTrafficTrend($zoneTag: string, $start: Time, $end: Time) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              traffic: httpRequestsAdaptiveGroups(
+                limit: 7
+                orderBy: [datetime_ASC]
+                filter: {
+                  datetime_geq: $start
+                  datetime_lt: $end
+                  requestSource: "eyeball"
+                }
+              ) {
+                dimensions {
+                  datetime
+                }
+                count
+                sum {
+                  visits
+                }
+              }
+            }
+          }
+        }
+        """
+
+        trend_start = now - timedelta(days=7)
+
+        trend_response = requests.post(
+            CLOUDFLARE_GRAPHQL_URL,
+            headers={
+                "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": trend_query,
+                "variables": {
+                    "zoneTag": CLOUDFLARE_ZONE_ID,
+                    "start": trend_start.isoformat() + "Z",
+                    "end": now.isoformat() + "Z",
+                },
+            },
+            timeout=20,
+        )
+
+        trend_data = trend_response.json()
+
+        trend_points = []
+        zones_trend = (((trend_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
+        if zones_trend:
+            rows = zones_trend[0].get("traffic") or []
+            for r in rows:
+                trend_points.append({
+                    "date": (r.get("dimensions") or {}).get("datetime"),
+                    "requests": int(r.get("count") or 0),
+                    "visits": int(((r.get("sum") or {}).get("visits")) or 0),
+                })
+
         return {
             "connected": True,
             "source": "cloudflare",
             "requests_last_24h": int(traffic.get("count") or 0),
             "visits_last_24h": int(((traffic.get("sum") or {}).get("visits")) or 0),
+            "trend_7d": trend_points,
             "message": "Cloudflare traffic metrics loaded successfully.",
         }
 
