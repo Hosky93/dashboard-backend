@@ -4374,6 +4374,38 @@ def admin_get_overview(
     visits_last_24h = int(traffic_summary.get("visits_last_24h") or 0)
     signup_conversion_rate_24h = round((new_users_24h / visits_last_24h) * 100, 2) if visits_last_24h > 0 else 0.0
 
+    top_pages_rows = (
+        db.query(TrafficEvent.path)
+        .filter(TrafficEvent.created_at >= last_7d)
+        .filter(TrafficEvent.path.isnot(None))
+        .all()
+    )
+
+    excluded_prefixes = (
+        "/admin",
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/favicon",
+        "/_next",
+    )
+
+    page_counts: Dict[str, int] = {}
+    for (raw_path,) in top_pages_rows:
+        path = (raw_path or "").strip()
+        if not path:
+            continue
+
+        if any(path.startswith(prefix) for prefix in excluded_prefixes):
+            continue
+
+        page_counts[path] = page_counts.get(path, 0) + 1
+
+    top_pages = [
+        {"path": path, "hits": hits}
+        for path, hits in sorted(page_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+    ]
+
     return {
         "generated_at": now.isoformat(),
         "users": {
@@ -4403,6 +4435,7 @@ def admin_get_overview(
         "traffic": {
             **traffic_summary,
             "signup_conversion_rate_24h": signup_conversion_rate_24h,
+            "top_pages_7d": top_pages,
         },
     }
 
