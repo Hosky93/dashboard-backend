@@ -784,6 +784,82 @@ def get_cloudflare_traffic_summary() -> Dict[str, Any]:
                         "visits": int(((r.get("sum") or {}).get("visits")) or 0),
                     })
 
+        if not trend_points:
+            try:
+                hourly_query = """
+                query GetHourlyTraffic($zoneTag: string, $start: Time, $end: Time) {
+                  viewer {
+                    zones(filter: { zoneTag: $zoneTag }) {
+                      traffic: httpRequestsAdaptiveGroups(
+                        limit: 168
+                        orderBy: [datetime_ASC]
+                        filter: {
+                          datetime_geq: $start
+                          datetime_lt: $end
+                        }
+                      ) {
+                        dimensions {
+                          datetime
+                        }
+                        count
+                        sum {
+                          visits
+                        }
+                      }
+                    }
+                  }
+                }
+                """
+
+                hourly_response = requests.post(
+                    CLOUDFLARE_GRAPHQL_URL,
+                    headers={
+                        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "query": hourly_query,
+                        "variables": {
+                            "zoneTag": CLOUDFLARE_ZONE_ID,
+                            "start": (now - timedelta(days=7)).isoformat() + "Z",
+                            "end": now.isoformat() + "Z",
+                        },
+                    },
+                    timeout=20,
+                )
+                hourly_response.raise_for_status()
+                hourly_data = hourly_response.json()
+
+                if hourly_data.get("errors"):
+                    logger.warning("Cloudflare hourly trend query returned errors: %s", hourly_data.get("errors"))
+                else:
+                    zones_hourly = (((hourly_data.get("data") or {}).get("viewer") or {}).get("zones") or [])
+                    if zones_hourly:
+                        buckets = zones_hourly[0].get("traffic") or []
+
+                        daily = {}
+                        for r in buckets:
+                            dt = (r.get("dimensions") or {}).get("datetime")
+                            if not dt:
+                                continue
+
+                            day = dt[:10]
+
+                            daily.setdefault(day, {"requests": 0, "visits": 0})
+                            daily[day]["requests"] += int(r.get("count") or 0)
+                            daily[day]["visits"] += int(((r.get("sum") or {}).get("visits")) or 0)
+
+                        trend_points = [
+                            {
+                                "date": day,
+                                "requests": values["requests"],
+                                "visits": values["visits"],
+                            }
+                            for day, values in sorted(daily.items())
+                        ]
+            except Exception:
+                logger.exception("Cloudflare hourly fallback trend query failed.")
+
         return {
             "connected": True,
             "source": "cloudflare",
