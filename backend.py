@@ -258,6 +258,14 @@ class TrafficEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     path = Column(String, nullable=True)
 
+class MRRSnapshot(Base):
+    __tablename__ = "mrr_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    mrr_gbp = Column(Integer, nullable=False)
+    active_paid_users = Column(Integer, nullable=False)
+
 Base.metadata.create_all(bind=engine)
 
 from sqlalchemy import text
@@ -679,59 +687,48 @@ def get_stripe_mrr_and_active_users() -> Tuple[float, int]:
         logger.exception("Stripe MRR calculation failed.")
         return 0.0, 0
 
+def create_mrr_snapshot(db: Session):
+    mrr, active_users = get_stripe_mrr_and_active_users()
 
-def get_stripe_revenue_timeseries(days: int = 6) -> List[Dict[str, Any]]:
-    """
-    Returns a simple day-by-day active subscription count and MRR estimate
-    for the last N+1 days including today.
+    snapshot = MRRSnapshot(
+        mrr_gbp=int(round(mrr * 100)),  # store in pence
+        active_paid_users=int(active_users),
+    )
 
-    This is based on currently active subscriptions and their current price.
-    It is not historical Stripe revenue accounting, but it gives a useful
-    live growth snapshot for the admin dashboard.
-    """
-    trend = []
+    db.add(snapshot)
+    db.commit()
+
+def get_stripe_revenue_timeseries(db: Session, days: int = 6) -> List[Dict[str, Any]]:
     now = datetime.utcnow()
+    start_date = now - timedelta(days=days)
 
-    for i in range(days, -1, -1):
-        day = (now - timedelta(days=i)).date()
-        trend.append(
-            {
-                "date": day.isoformat(),
-                "active_paid_users": 0,
-                "mrr_gbp": 0.0,
-            }
-        )
+    snapshots = (
+        db.query(MRRSnapshot)
+        .filter(MRRSnapshot.created_at >= start_date)
+        .order_by(MRRSnapshot.created_at.asc())
+        .all()
+    )
 
-    if not STRIPE_SECRET_KEY:
-        return trend
+    # Build day buckets
+    trend_map = {}
+    for i in range(days + 1):
+        day = (now - timedelta(days=i)).date().isoformat()
+        trend_map[day] = {
+            "date": day,
+            "mrr_gbp": 0,
+            "active_paid_users": 0,
+        }
 
-    try:
-        subscriptions = stripe.Subscription.list(status="active", limit=100)
+    # Fill from snapshots (latest per day wins)
+    for snap in snapshots:
+        day = snap.created_at.date().isoformat()
+        trend_map[day] = {
+            "date": day,
+            "mrr_gbp": snap.mrr_gbp / 100.0,  # convert back to pounds
+            "active_paid_users": snap.active_paid_users,
+        }
 
-        active_count = 0
-        total_mrr = 0.0
-
-        for sub in subscriptions.auto_paging_iter():
-            items = ((sub.get("items") or {}).get("data") or [])
-            if not items:
-                continue
-
-            price = (items[0].get("price") or {})
-            unit_amount = price.get("unit_amount") or 0
-            monthly_amount = unit_amount / 100
-
-            active_count += 1
-            total_mrr += monthly_amount
-
-        for row in trend:
-            row["active_paid_users"] = active_count
-            row["mrr_gbp"] = round(total_mrr, 2)
-
-        return trend
-
-    except Exception:
-        logger.exception("Stripe revenue trend calculation failed.")
-        return trend
+    return list(sorted(trend_map.values(), key=lambda x: x["date"]))
 
 
 def get_revenue_growth_summary(trend: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -4651,6 +4648,15 @@ def admin_delete_test_users(
         },
         "deleted_emails": deleted_emails,
     }
+  
+@app.post("/admin/create-mrr-snapshot")
+def admin_create_mrr_snapshot(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+    create_mrr_snapshot(db)
+    return {"success": True, "message": "MRR snapshot created successfully."}  
 
 @app.get("/admin/stats")
 def admin_get_stats(
@@ -4814,7 +4820,7 @@ def admin_get_overview(
     canceled_users = sum(1 for item in synced_users if item["effective_status"] == "canceled")
 
     stripe_mrr, stripe_active_users = get_stripe_mrr_and_active_users()
-    revenue_trend_7d = get_stripe_revenue_timeseries(days=6)
+    revenue_trend_7d = get_stripe_revenue_timeseries(db, days=6)
     revenue_growth = get_revenue_growth_summary(revenue_trend_7d)
     traffic_summary = get_cloudflare_traffic_summary()
 
