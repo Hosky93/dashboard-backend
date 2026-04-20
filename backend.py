@@ -679,6 +679,104 @@ def get_stripe_mrr_and_active_users() -> Tuple[float, int]:
 def get_live_stripe_status_map(customer_ids: List[str]) -> Dict[str, str]:
     """
     Returns a map of Stripe customer id -> live subscription status.
+    """
+    status_map: Dict[str, str] = {}
+
+    if not STRIPE_SECRET_KEY:
+        return status_map
+
+    unique_customer_ids = sorted(
+        {
+            (customer_id or "").strip()
+            for customer_id in customer_ids
+            if (customer_id or "").strip()
+        }
+    )
+
+    for customer_id in unique_customer_ids:
+        try:
+            subscriptions = stripe.Subscription.list(
+                customer=customer_id,
+                status="all",
+                limit=10,
+            )
+
+            subscription_rows = subscriptions.get("data") or []
+
+            if not subscription_rows:
+                status_map[customer_id] = "none"
+                continue
+
+            def _status_rank(status_value: str) -> int:
+                normalized = (status_value or "").strip().lower()
+                if normalized == "active":
+                    return 100
+                if normalized == "trialing":
+                    return 90
+                if normalized == "past_due":
+                    return 70
+                if normalized == "unpaid":
+                    return 60
+                if normalized == "incomplete":
+                    return 50
+                if normalized == "incomplete_expired":
+                    return 40
+                if normalized == "canceled":
+                    return 30
+                return 10
+
+            best_subscription = max(
+                subscription_rows,
+                key=lambda sub: _status_rank((sub.get("status") or "").strip().lower()),
+            )
+
+            status_map[customer_id] = (best_subscription.get("status") or "none").strip().lower() or "none"
+
+        except Exception:
+            logger.exception("Failed loading Stripe subscription status for customer %s", customer_id)
+            status_map[customer_id] = "error"
+
+    return status_map
+
+
+def get_effective_subscription_status(
+    db_status: Optional[str],
+    stripe_status: Optional[str],
+) -> str:
+    """
+    Stripe must win here.
+
+    Rules:
+    - active / trialing in Stripe => active
+    - canceled / unpaid / past_due / incomplete / incomplete_expired / none / error => not active
+    - only users with no Stripe customer id at all can fall back to DB trial/canceled
+    """
+    normalized_db_status = (db_status or "trial").strip().lower()
+    normalized_stripe_status = (stripe_status or "").strip().lower()
+
+    if normalized_stripe_status in {"active", "trialing"}:
+        return "active"
+
+    if normalized_stripe_status in {
+        "canceled",
+        "unpaid",
+        "past_due",
+        "incomplete",
+        "incomplete_expired",
+        "none",
+        "error",
+    }:
+        return "trial" if normalized_db_status == "trial" else "canceled"
+
+    if normalized_db_status in {"trial", "canceled"}:
+        return normalized_db_status
+
+    return "trial"
+
+
+def get_live_stripe_status_map(customer_ids: List[str]) -> Dict[str, str]:
+    """
+    Returns a map of Stripe customer id -> live subscription status.
 
     Rules:
     - active / trialing => paid
