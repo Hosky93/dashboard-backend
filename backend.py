@@ -645,6 +645,36 @@ def get_next_report_due_at(saved_view: SavedView) -> Optional[datetime]:
 
     return None
 
+def get_stripe_mrr_and_active_users() -> Tuple[float, int]:
+    if not STRIPE_SECRET_KEY:
+        return 0.0, 0
+
+    try:
+        subscriptions = stripe.Subscription.list(status="active", limit=100)
+
+        total_mrr = 0.0
+        active_users = 0
+
+        for sub in subscriptions.auto_paging_iter():
+            items = ((sub.get("items") or {}).get("data") or [])
+            if not items:
+                continue
+
+            price = (items[0].get("price") or {})
+            unit_amount = price.get("unit_amount") or 0
+
+            # Stripe returns pence for GBP amounts
+            monthly_amount = unit_amount / 100
+
+            total_mrr += monthly_amount
+            active_users += 1
+
+        return round(total_mrr, 2), active_users
+
+    except Exception:
+        logger.exception("Stripe MRR calculation failed.")
+        return 0.0, 0
+
 def get_cloudflare_traffic_summary() -> Dict[str, Any]:
     if not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ZONE_ID:
         return {
@@ -4381,36 +4411,6 @@ def admin_get_overview(
         .all()
     )
 
-def get_stripe_mrr_and_active_users():
-    if not STRIPE_SECRET_KEY:
-        return 0, 0
-
-    try:
-        subscriptions = stripe.Subscription.list(status="active", limit=100)
-
-        total_mrr = 0
-        active_users = 0
-
-        for sub in subscriptions.auto_paging_iter():
-            if not sub.get("items") or not sub["items"]["data"]:
-                continue
-
-            price = sub["items"]["data"][0]["price"]
-            unit_amount = price.get("unit_amount") or 0
-
-            # Stripe gives amount in pence → convert to GBP
-            monthly_amount = unit_amount / 100
-
-            total_mrr += monthly_amount
-            active_users += 1
-
-        return round(total_mrr, 2), active_users
-
-    except Exception as e:
-        logger.exception("Stripe MRR calculation failed")
-        return 0, 0
-
-
     stripe_mrr, stripe_active_users = get_stripe_mrr_and_active_users()
     traffic_summary = get_cloudflare_traffic_summary()
 
@@ -4425,7 +4425,7 @@ def get_stripe_mrr_and_active_users():
         else 0.0
     )
     verification_rate_7d = round((verified_users / total_users) * 100, 2) if total_users > 0 else 0.0
-    paid_conversion_rate_7d = round((active_paid_users / verified_users) * 100, 2) if verified_users > 0 else 0.0
+    paid_conversion_rate_7d = round((stripe_active_users / verified_users) * 100, 2) if verified_users > 0 else 0.0
 
     top_pages_rows = (
         db.query(TrafficEvent.path)
@@ -4482,9 +4482,11 @@ def get_stripe_mrr_and_active_users():
             "total_saved_views": total_saved_views,
         },
         "revenue": {
-        "plan_price_gbp": pro_price_gbp,
-        "active_paid_users": stripe_active_users,
-        "estimated_mrr_gbp": stripe_mrr,
+            "currency": "GBP",
+            "plan_price_gbp": pro_price_gbp,
+            "active_paid_users": stripe_active_users,
+            "estimated_mrr_gbp": stripe_mrr,
+            "source": "stripe_live",
         },
         "traffic": {
             **traffic_summary,
