@@ -4313,6 +4313,13 @@ def admin_get_stats(
     dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
     dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
 
+    recent_users = (
+        db.query(User)
+        .order_by(User.created_at.desc())
+        .limit(50)
+        .all()
+    )
+
     return {
         "generated_at": now.isoformat(),
         "users": {
@@ -4460,6 +4467,16 @@ def admin_get_overview(
             "signup_to_verified_rate_total": verification_rate_7d,
             "verified_to_paid_rate_total": paid_conversion_rate_7d,
         },
+        "recent_users": [
+            {
+                "email": user.email,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "email_verified": bool(user.email_verified),
+                "subscription_status": user.subscription_status or "trial",
+                "stripe_customer_id": user.stripe_customer_id,
+            }
+            for user in recent_users
+        ],
     }
 
 def apply_dimension_filters(
