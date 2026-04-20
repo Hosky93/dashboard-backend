@@ -675,6 +675,90 @@ def get_stripe_mrr_and_active_users() -> Tuple[float, int]:
         logger.exception("Stripe MRR calculation failed.")
         return 0.0, 0
 
+
+def get_live_stripe_status_map(customer_ids: List[str]) -> Dict[str, str]:
+    """
+    Returns a map of Stripe customer id -> live subscription status.
+
+    Rules:
+    - active / trialing => paid
+    - canceled / unpaid / past_due / incomplete / incomplete_expired => not paid
+    - if no subscriptions exist for that customer => none
+    """
+    status_map: Dict[str, str] = {}
+
+    if not STRIPE_SECRET_KEY:
+        return status_map
+
+    unique_customer_ids = sorted({(customer_id or "").strip() for customer_id in customer_ids if (customer_id or "").strip()})
+
+    for customer_id in unique_customer_ids:
+        try:
+            subscriptions = stripe.Subscription.list(
+                customer=customer_id,
+                status="all",
+                limit=10,
+            )
+
+            subscription_rows = subscriptions.get("data") or []
+
+            if not subscription_rows:
+                status_map[customer_id] = "none"
+                continue
+
+            def _status_rank(status_value: str) -> int:
+                normalized = (status_value or "").strip().lower()
+                if normalized == "active":
+                    return 100
+                if normalized == "trialing":
+                    return 90
+                if normalized == "past_due":
+                    return 70
+                if normalized == "unpaid":
+                    return 60
+                if normalized == "incomplete":
+                    return 50
+                if normalized == "incomplete_expired":
+                    return 40
+                if normalized == "canceled":
+                    return 30
+                return 10
+
+            best_subscription = max(
+                subscription_rows,
+                key=lambda sub: _status_rank((sub.get("status") or "").strip().lower()),
+            )
+
+            status_map[customer_id] = (best_subscription.get("status") or "none").strip().lower() or "none"
+
+        except Exception:
+            logger.exception("Failed loading Stripe subscription status for customer %s", customer_id)
+            status_map[customer_id] = "error"
+
+    return status_map
+
+
+def get_effective_subscription_status(
+    db_status: Optional[str],
+    stripe_status: Optional[str],
+) -> str:
+    stripe_value = (stripe_status or "").strip().lower()
+    db_value = (db_status or "trial").strip().lower()
+
+    if stripe_value in {"active", "trialing"}:
+        return "active"
+
+    if stripe_value in {"canceled", "unpaid", "past_due", "incomplete", "incomplete_expired"}:
+        return "canceled"
+
+    if stripe_value == "none":
+        return db_value if db_value in {"active", "trial", "canceled"} else "trial"
+
+    if stripe_value == "error":
+        return db_value if db_value in {"active", "trial", "canceled"} else "trial"
+
+    return db_value if db_value in {"active", "trial", "canceled"} else "trial"
+
 def get_cloudflare_traffic_summary() -> Dict[str, Any]:
     if not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ZONE_ID:
         return {
@@ -4389,9 +4473,6 @@ def admin_get_overview(
 
     total_users = db.query(User).count()
     verified_users = db.query(User).filter(User.email_verified == True).count()
-    active_paid_users = db.query(User).filter(User.subscription_status == "active").count()
-    trial_users = db.query(User).filter(User.subscription_status == "trial").count()
-    canceled_users = db.query(User).filter(User.subscription_status == "canceled").count()
 
     total_dashboards = db.query(Dashboard).count()
     total_saved_views = db.query(SavedView).count()
@@ -4404,12 +4485,42 @@ def admin_get_overview(
     dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
     dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
 
+    all_users = db.query(User).all()
+
     recent_users = (
         db.query(User)
         .order_by(User.created_at.desc())
         .limit(50)
         .all()
     )
+
+    stripe_customer_ids = [
+        (user.stripe_customer_id or "").strip()
+        for user in all_users
+        if (user.stripe_customer_id or "").strip()
+    ]
+    stripe_status_map = get_live_stripe_status_map(stripe_customer_ids)
+
+    synced_users = []
+    for user in all_users:
+        stripe_customer_id = (user.stripe_customer_id or "").strip()
+        stripe_status = stripe_status_map.get(stripe_customer_id, "none") if stripe_customer_id else "none"
+        effective_status = get_effective_subscription_status(
+            user.subscription_status,
+            stripe_status,
+        )
+
+        synced_users.append(
+            {
+                "user": user,
+                "stripe_status": stripe_status,
+                "effective_status": effective_status,
+            }
+        )
+
+    active_paid_users = sum(1 for item in synced_users if item["effective_status"] == "active")
+    trial_users = sum(1 for item in synced_users if item["effective_status"] == "trial")
+    canceled_users = sum(1 for item in synced_users if item["effective_status"] == "canceled")
 
     stripe_mrr, stripe_active_users = get_stripe_mrr_and_active_users()
     traffic_summary = get_cloudflare_traffic_summary()
@@ -4462,6 +4573,27 @@ def admin_get_overview(
         for path, hits in sorted(page_counts.items(), key=lambda item: item[1], reverse=True)[:8]
     ]
 
+    recent_user_rows = []
+    for user in recent_users:
+        stripe_customer_id = (user.stripe_customer_id or "").strip()
+        stripe_status = stripe_status_map.get(stripe_customer_id, "none") if stripe_customer_id else "none"
+        effective_status = get_effective_subscription_status(
+            user.subscription_status,
+            stripe_status,
+        )
+
+        recent_user_rows.append(
+            {
+                "email": user.email,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "email_verified": bool(user.email_verified),
+                "subscription_status": user.subscription_status or "trial",
+                "stripe_status": stripe_status,
+                "effective_status": effective_status,
+                "stripe_customer_id": user.stripe_customer_id,
+            }
+        )
+
     return {
         "generated_at": now.isoformat(),
         "users": {
@@ -4504,16 +4636,7 @@ def admin_get_overview(
             "signup_to_verified_rate_total": verification_rate_7d,
             "verified_to_paid_rate_total": paid_conversion_rate_7d,
         },
-        "recent_users": [
-            {
-                "email": user.email,
-                "created_at": user.created_at.isoformat() if user.created_at else None,
-                "email_verified": bool(user.email_verified),
-                "subscription_status": user.subscription_status or "trial",
-                "stripe_customer_id": user.stripe_customer_id,
-            }
-            for user in recent_users
-        ],
+        "recent_users": recent_user_rows,
     }
 
 def apply_dimension_filters(
