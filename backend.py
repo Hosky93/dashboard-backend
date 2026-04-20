@@ -4374,6 +4374,13 @@ def admin_get_overview(
     dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
     dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
 
+    recent_users = (
+        db.query(User)
+        .order_by(User.created_at.desc())
+        .limit(50)
+        .all()
+    )
+
     estimated_mrr_gbp = round(active_paid_users * pro_price_gbp, 2)
     traffic_summary = get_cloudflare_traffic_summary()
 
