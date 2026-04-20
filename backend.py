@@ -734,7 +734,7 @@ def get_live_stripe_status_map(customer_ids: List[str]) -> Dict[str, str]:
 
         except Exception:
             logger.exception("Failed loading Stripe subscription status for customer %s", customer_id)
-            status_map[customer_id] = "error"
+            status_map[customer_id] = "none"
 
     return status_map
 
@@ -744,32 +744,29 @@ def get_effective_subscription_status(
     stripe_status: Optional[str],
 ) -> str:
     """
-    Stripe must win here.
+    Stripe ALWAYS wins.
 
-    Rules:
-    - active / trialing in Stripe => active
-    - canceled / unpaid / past_due / incomplete / incomplete_expired / none / error => not active
-    - only users with no Stripe customer id at all can fall back to DB trial/canceled
+    Only Stripe active/trialing = active user.
+    Everything else = not paid.
     """
-    normalized_db_status = (db_status or "trial").strip().lower()
-    normalized_stripe_status = (stripe_status or "").strip().lower()
 
-    if normalized_stripe_status in {"active", "trialing"}:
+    stripe_value = (stripe_status or "").strip().lower()
+
+    # ✅ ONLY real Stripe active users count
+    if stripe_value in {"active", "trialing"}:
         return "active"
 
-    if normalized_stripe_status in {
+    # ❌ EVERYTHING else is not active
+    if stripe_value in {
+        "none",
         "canceled",
         "unpaid",
         "past_due",
         "incomplete",
         "incomplete_expired",
-        "none",
         "error",
     }:
-        return "trial" if normalized_db_status == "trial" else "canceled"
-
-    if normalized_db_status in {"trial", "canceled"}:
-        return normalized_db_status
+        return "trial"
 
     return "trial"
 
