@@ -4400,6 +4400,141 @@ def admin_get_user_dashboards(
         ],
     }
 
+@app.post("/admin/force-sync-subscriptions")
+def admin_force_sync_subscriptions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    all_users = db.query(User).all()
+
+    stripe_customer_ids = [
+        (user.stripe_customer_id or "").strip()
+        for user in all_users
+        if (user.stripe_customer_id or "").strip()
+    ]
+    stripe_status_map = get_live_stripe_status_map(stripe_customer_ids)
+
+    updated_users = []
+    unchanged_users = []
+    active_count = 0
+    trial_count = 0
+    canceled_count = 0
+
+    for user in all_users:
+        stripe_customer_id = (user.stripe_customer_id or "").strip()
+        stripe_status = stripe_status_map.get(stripe_customer_id, "none") if stripe_customer_id else "none"
+        effective_status = get_effective_subscription_status(
+            user.subscription_status,
+            stripe_status,
+        )
+
+        old_status = (user.subscription_status or "trial").strip().lower()
+        new_status = effective_status
+
+        if old_status != new_status:
+            user.subscription_status = new_status
+            updated_users.append(
+                {
+                    "email": user.email,
+                    "old_status": old_status,
+                    "new_status": new_status,
+                    "stripe_status": stripe_status,
+                    "stripe_customer_id": user.stripe_customer_id,
+                }
+            )
+        else:
+            unchanged_users.append(user.email)
+
+        if new_status == "active":
+            active_count += 1
+        elif new_status == "canceled":
+            canceled_count += 1
+        else:
+            trial_count += 1
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "User subscription statuses synced from Stripe.",
+        "summary": {
+            "total_users_checked": len(all_users),
+            "updated_users": len(updated_users),
+            "unchanged_users": len(unchanged_users),
+            "active": active_count,
+            "trial": trial_count,
+            "canceled": canceled_count,
+        },
+        "updated": updated_users,
+    }
+
+
+@app.post("/admin/delete-test-users")
+def admin_delete_test_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    all_users = db.query(User).all()
+
+    deleted_emails = []
+    skipped_emails = []
+
+    test_email_patterns = [
+        "test",
+        "mailinator",
+        "temp",
+        "fake",
+        "demo",
+    ]
+
+    for user in all_users:
+        email = (user.email or "").strip().lower()
+
+        is_test_user = any(pattern in email for pattern in test_email_patterns)
+
+        if not is_test_user:
+            skipped_emails.append(email)
+            continue
+
+        if email == ADMIN_EMAIL:
+            skipped_emails.append(email)
+            continue
+
+        if user.dashboards:
+            for dashboard in user.dashboards:
+                saved_views = (
+                    db.query(SavedView)
+                    .filter(SavedView.dashboard_id == dashboard.id)
+                    .all()
+                )
+                for saved_view in saved_views:
+                    db.delete(saved_view)
+
+                db.delete(dashboard)
+
+        saved_mappings = db.query(SavedMapping).filter(SavedMapping.user_id == user.id).all()
+        for saved_mapping in saved_mappings:
+            db.delete(saved_mapping)
+
+        deleted_emails.append(email)
+        db.delete(user)
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Test users deleted.",
+        "summary": {
+            "deleted_users": len(deleted_emails),
+            "skipped_users": len(skipped_emails),
+        },
+        "deleted_emails": deleted_emails,
+    }
+
 @app.get("/admin/stats")
 def admin_get_stats(
     current_user: User = Depends(get_current_user),
