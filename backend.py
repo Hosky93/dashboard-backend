@@ -181,6 +181,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     subscription_status = Column(String, default="trial")  # trial, active, canceled
     stripe_customer_id = Column(String, nullable=True)
+    is_test_user = Column(Boolean, nullable=False, default=False)
 
     email_verified = Column(Boolean, nullable=False, default=False)
     email_verification_token = Column(String, nullable=True, index=True)
@@ -346,6 +347,9 @@ def run_safe_migrations() -> None:
 
             if "password_reset_expires_at" not in existing_user_columns:
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_reset_expires_at TIMESTAMP")
+
+            if "is_test_user" not in existing_user_columns:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN is_test_user BOOLEAN NOT NULL DEFAULT FALSE")
 
             # No test-account exceptions in production safe migrations.
 
@@ -674,6 +678,103 @@ def get_stripe_mrr_and_active_users() -> Tuple[float, int]:
     except Exception:
         logger.exception("Stripe MRR calculation failed.")
         return 0.0, 0
+
+
+def get_stripe_revenue_timeseries(days: int = 6) -> List[Dict[str, Any]]:
+    """
+    Returns a simple day-by-day active subscription count and MRR estimate
+    for the last N+1 days including today.
+
+    This is based on currently active subscriptions and their current price.
+    It is not historical Stripe revenue accounting, but it gives a useful
+    live growth snapshot for the admin dashboard.
+    """
+    trend = []
+    now = datetime.utcnow()
+
+    for i in range(days, -1, -1):
+        day = (now - timedelta(days=i)).date()
+        trend.append(
+            {
+                "date": day.isoformat(),
+                "active_paid_users": 0,
+                "mrr_gbp": 0.0,
+            }
+        )
+
+    if not STRIPE_SECRET_KEY:
+        return trend
+
+    try:
+        subscriptions = stripe.Subscription.list(status="active", limit=100)
+
+        active_count = 0
+        total_mrr = 0.0
+
+        for sub in subscriptions.auto_paging_iter():
+            items = ((sub.get("items") or {}).get("data") or [])
+            if not items:
+                continue
+
+            price = (items[0].get("price") or {})
+            unit_amount = price.get("unit_amount") or 0
+            monthly_amount = unit_amount / 100
+
+            active_count += 1
+            total_mrr += monthly_amount
+
+        for row in trend:
+            row["active_paid_users"] = active_count
+            row["mrr_gbp"] = round(total_mrr, 2)
+
+        return trend
+
+    except Exception:
+        logger.exception("Stripe revenue trend calculation failed.")
+        return trend
+
+
+def get_revenue_growth_summary(trend: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not trend:
+        return {
+            "current_mrr_gbp": 0.0,
+            "previous_mrr_gbp": 0.0,
+            "growth_amount_gbp": 0.0,
+            "growth_rate_pct": 0.0,
+        }
+
+    current = float((trend[-1] or {}).get("mrr_gbp") or 0.0)
+    previous = float((trend[0] or {}).get("mrr_gbp") or 0.0)
+    growth_amount = current - previous
+
+    if previous > 0:
+        growth_rate = round((growth_amount / previous) * 100, 2)
+    else:
+        growth_rate = 0.0
+
+    return {
+        "current_mrr_gbp": round(current, 2),
+        "previous_mrr_gbp": round(previous, 2),
+        "growth_amount_gbp": round(growth_amount, 2),
+        "growth_rate_pct": growth_rate,
+    }
+
+
+def looks_like_test_user(user: User) -> bool:
+    email = (user.email or "").strip().lower()
+
+    if user.is_test_user:
+        return True
+
+    test_email_patterns = [
+        "test",
+        "mailinator",
+        "temp",
+        "fake",
+        "demo",
+    ]
+
+    return any(pattern in email for pattern in test_email_patterns)
 
 
 def get_live_stripe_status_map(customer_ids: List[str]) -> Dict[str, str]:
@@ -4400,6 +4501,30 @@ def admin_get_user_dashboards(
         ],
     }
 
+@app.post("/admin/set-test-user")
+def admin_set_test_user(
+    email: str,
+    is_test_user: bool,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_test_user = bool(is_test_user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "success",
+        "email": user.email,
+        "is_test_user": bool(user.is_test_user),
+    }
+
 @app.post("/admin/force-sync-subscriptions")
 def admin_force_sync_subscriptions(
     current_user: User = Depends(get_current_user),
@@ -4483,18 +4608,10 @@ def admin_delete_test_users(
     deleted_emails = []
     skipped_emails = []
 
-    test_email_patterns = [
-        "test",
-        "mailinator",
-        "temp",
-        "fake",
-        "demo",
-    ]
-
     for user in all_users:
         email = (user.email or "").strip().lower()
 
-        is_test_user = any(pattern in email for pattern in test_email_patterns)
+        is_test_user = looks_like_test_user(user)
 
         if not is_test_user:
             skipped_emails.append(email)
@@ -4605,6 +4722,7 @@ def admin_get_stats(
 
 @app.get("/admin/overview")
 def admin_get_overview(
+    include_test_users: bool = True,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -4617,38 +4735,65 @@ def admin_get_overview(
 
     pro_price_gbp = 14.99
 
-    total_users = db.query(User).count()
-    verified_users = db.query(User).filter(User.email_verified == True).count()
-
-    total_dashboards = db.query(Dashboard).count()
-    total_saved_views = db.query(SavedView).count()
-
-    new_users_24h = db.query(User).filter(User.created_at >= last_24h).count()
-    new_users_7d = db.query(User).filter(User.created_at >= last_7d).count()
-    new_users_30d = db.query(User).filter(User.created_at >= last_30d).count()
-
-    dashboards_24h = db.query(Dashboard).filter(Dashboard.created_at >= last_24h).count()
-    dashboards_7d = db.query(Dashboard).filter(Dashboard.created_at >= last_7d).count()
-    dashboards_30d = db.query(Dashboard).filter(Dashboard.created_at >= last_30d).count()
-
     all_users = db.query(User).all()
 
-    recent_users = (
-        db.query(User)
-        .order_by(User.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    if include_test_users:
+        dashboard_users = all_users
+    else:
+        dashboard_users = [user for user in all_users if not looks_like_test_user(user)]
+
+    dashboard_user_ids = [user.id for user in dashboard_users]
+
+    total_users = len(dashboard_users)
+    verified_users = sum(1 for user in dashboard_users if bool(user.email_verified))
+
+    if dashboard_user_ids:
+        total_dashboards = db.query(Dashboard).filter(Dashboard.user_id.in_(dashboard_user_ids)).count()
+    else:
+        total_dashboards = 0
+
+    total_saved_views = db.query(SavedView).count()
+
+    new_users_24h = sum(1 for user in dashboard_users if user.created_at and user.created_at >= last_24h)
+    new_users_7d = sum(1 for user in dashboard_users if user.created_at and user.created_at >= last_7d)
+    new_users_30d = sum(1 for user in dashboard_users if user.created_at and user.created_at >= last_30d)
+
+    if dashboard_user_ids:
+        dashboards_24h = (
+            db.query(Dashboard)
+            .filter(Dashboard.user_id.in_(dashboard_user_ids), Dashboard.created_at >= last_24h)
+            .count()
+        )
+        dashboards_7d = (
+            db.query(Dashboard)
+            .filter(Dashboard.user_id.in_(dashboard_user_ids), Dashboard.created_at >= last_7d)
+            .count()
+        )
+        dashboards_30d = (
+            db.query(Dashboard)
+            .filter(Dashboard.user_id.in_(dashboard_user_ids), Dashboard.created_at >= last_30d)
+            .count()
+        )
+    else:
+        dashboards_24h = 0
+        dashboards_7d = 0
+        dashboards_30d = 0
+
+    recent_users = sorted(
+        dashboard_users,
+        key=lambda user: user.created_at or datetime.min,
+        reverse=True,
+    )[:50]
 
     stripe_customer_ids = [
         (user.stripe_customer_id or "").strip()
-        for user in all_users
+        for user in dashboard_users
         if (user.stripe_customer_id or "").strip()
     ]
     stripe_status_map = get_live_stripe_status_map(stripe_customer_ids)
 
     synced_users = []
-    for user in all_users:
+    for user in dashboard_users:
         stripe_customer_id = (user.stripe_customer_id or "").strip()
         stripe_status = stripe_status_map.get(stripe_customer_id, "none") if stripe_customer_id else "none"
         effective_status = get_effective_subscription_status(
@@ -4669,6 +4814,8 @@ def admin_get_overview(
     canceled_users = sum(1 for item in synced_users if item["effective_status"] == "canceled")
 
     stripe_mrr, stripe_active_users = get_stripe_mrr_and_active_users()
+    revenue_trend_7d = get_stripe_revenue_timeseries(days=6)
+    revenue_growth = get_revenue_growth_summary(revenue_trend_7d)
     traffic_summary = get_cloudflare_traffic_summary()
 
     visits_last_24h = int(traffic_summary.get("visits_last_24h") or 0)
@@ -4737,11 +4884,16 @@ def admin_get_overview(
                 "stripe_status": stripe_status,
                 "effective_status": effective_status,
                 "stripe_customer_id": user.stripe_customer_id,
+                "is_test_user": bool(user.is_test_user),
+                "auto_detected_test_user": looks_like_test_user(user),
             }
         )
 
     return {
         "generated_at": now.isoformat(),
+        "filters": {
+            "include_test_users": include_test_users,
+        },
         "users": {
             "total": total_users,
             "verified": verified_users,
@@ -4765,6 +4917,8 @@ def admin_get_overview(
             "active_paid_users": stripe_active_users,
             "estimated_mrr_gbp": stripe_mrr,
             "source": "stripe_live",
+            "trend_7d": revenue_trend_7d,
+            "growth": revenue_growth,
         },
         "traffic": {
             **traffic_summary,
