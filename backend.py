@@ -258,13 +258,15 @@ class TrafficEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     path = Column(String, nullable=True)
 
-class MRRSnapshot(Base):
-    __tablename__ = "mrr_snapshots"
+class InternalErrorEvent(Base):
+    __tablename__ = "internal_error_events"
 
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    mrr_gbp = Column(Integer, nullable=False)
-    active_paid_users = Column(Integer, nullable=False)
+    source = Column(String, nullable=False)
+    user_email = Column(String, nullable=True)
+    message = Column(Text, nullable=False)
+    details = Column(Text, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -382,6 +384,31 @@ def run_safe_migrations() -> None:
 
 
 run_safe_migrations()
+
+def record_internal_error(
+    source: str,
+    message: str,
+    user_email: Optional[str] = None,
+    details: Optional[str] = None,
+) -> None:
+    try:
+        db = SessionLocal()
+        db.add(
+            InternalErrorEvent(
+                source=(source or "unknown").strip(),
+                user_email=(user_email or "").strip().lower() or None,
+                message=(message or "").strip() or "Unknown error",
+                details=(details or "").strip() or None,
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to persist internal error event.")
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 # =============================================================
 # EMAIL
@@ -523,13 +550,25 @@ def send_email_message(
             except Exception:
                 pass
 
-    except HTTPException:
+    except HTTPException as exc:
+        record_internal_error(
+            source="email_send_http",
+            user_email=to_email,
+            message=str(exc.detail) if hasattr(exc, "detail") else str(exc),
+            details=f"subject={subject}",
+        )
         raise
     except Exception as exc:
         logger.exception(
             "Failed to send email via Resend to=%s subject=%s",
             to_email,
             subject,
+        )
+        record_internal_error(
+            source="email_send_exception",
+            user_email=to_email,
+            message=str(exc),
+            details=f"subject={subject}",
         )
         raise HTTPException(
             status_code=500,
@@ -4456,6 +4495,7 @@ def admin_set_subscription(
 
     allowed_statuses = {"trial", "active", "canceled"}
     normalized_status = (subscription_status or "").strip().lower()
+    normalized_email = (email or "").strip().lower()
 
     if normalized_status not in allowed_statuses:
         raise HTTPException(
@@ -4463,7 +4503,7 @@ def admin_set_subscription(
             detail="subscription_status must be one of: trial, active, canceled",
         )
 
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(User.email == normalized_email).first()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -4791,6 +4831,127 @@ def admin_create_mrr_snapshot(
     create_mrr_snapshot(db)
     return {"success": True, "message": "MRR snapshot created successfully."}  
 
+@app.post("/admin/send-test-email-check")
+def admin_send_test_email_check(
+    current_user: User = Depends(get_current_user),
+):
+    require_admin(current_user)
+
+    send_email_message(
+        to_email=ADMIN_EMAIL,
+        subject="Easy-dash admin email check",
+        body_text=(
+            f"Hello,\n\n"
+            f"This is a plain admin email check from Easy-dash.\n\n"
+            f"Sent at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        ),
+        from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+        from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
+    )
+
+    return {
+        "status": "success",
+        "message": f"Test email sent successfully to {ADMIN_EMAIL}",
+    }
+
+
+@app.post("/admin/send-user-dashboard-report-check")
+def admin_send_user_dashboard_report_check(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    dashboard = (
+        db.query(Dashboard)
+        .filter(Dashboard.user_id == user.id)
+        .order_by(Dashboard.created_at.desc())
+        .first()
+    )
+
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="No dashboard found for that user")
+
+    try:
+        dashboard_payload = json.loads(dashboard.dashboard_json or "{}")
+    except Exception:
+        record_internal_error(
+            source="dashboard_report_check",
+            user_email=user.email,
+            message="Saved dashboard data is invalid.",
+            details=f"dashboard_id={dashboard.id}",
+        )
+        raise HTTPException(status_code=500, detail="Saved dashboard data is invalid.")
+
+    try:
+        saved_mapping = json.loads(dashboard.mapping_json or "{}")
+    except Exception:
+        saved_mapping = {}
+
+    pdf_html = build_dashboard_report_email_html(
+        file_name=dashboard.file_name,
+        dashboard_payload=dashboard_payload,
+        applied_filters=saved_mapping.get("filters", {}) or {},
+    )
+    pdf_bytes = HTML(string=pdf_html).write_pdf()
+    pdf_filename = build_safe_pdf_filename(dashboard.file_name)
+
+    email_body_text = (
+        f"Hello,\n\n"
+        f"This is an admin dashboard report email check.\n\n"
+        f"Source user: {user.email}\n"
+        f"Dashboard: {dashboard.file_name}\n"
+        f"Generated by Easy-dash."
+    )
+
+    email_body_html = f"""
+        <div style="font-family:Arial,Helvetica,sans-serif;background:#020617;padding:32px;color:#e5e7eb;">
+          <div style="max-width:620px;margin:0 auto;border:1px solid #1e293b;border-radius:24px;background:#0f172a;padding:32px;">
+            <p style="margin:0 0 12px 0;color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.08em;">
+              Easy-dash
+            </p>
+            <h1 style="margin:0 0 12px 0;color:#ffffff;font-size:28px;">Admin dashboard report check</h1>
+            <p style="margin:0;color:#cbd5e1;line-height:1.7;">
+              This dashboard report was sent from the admin toolkit for testing.
+            </p>
+            <p style="margin:18px 0 0 0;color:#94a3b8;font-size:14px;line-height:1.7;">
+              Source user: <span style="color:#ffffff;">{html_escape(user.email)}</span><br/>
+              Dashboard: <span style="color:#ffffff;">{html_escape(dashboard.file_name)}</span>
+            </p>
+          </div>
+        </div>
+    """.strip()
+
+    send_email_message(
+        to_email=ADMIN_EMAIL,
+        subject=f"Admin report check: {dashboard.file_name}",
+        body_text=email_body_text,
+        body_html=email_body_html,
+        from_address=os.getenv("REPORTS_FROM_ADDRESS", EMAIL_FROM_ADDRESS).strip(),
+        from_name=os.getenv("REPORTS_FROM_NAME", "Dashboard Reports").strip(),
+        attachments=[
+            {
+                "filename": pdf_filename,
+                "content_bytes": pdf_bytes,
+                "content_type": "application/pdf",
+            }
+        ],
+    )
+
+    return {
+        "status": "success",
+        "message": f"Dashboard report check sent successfully to {ADMIN_EMAIL}",
+        "dashboard_id": dashboard.id,
+        "file_name": dashboard.file_name,
+    }
+
 @app.get("/admin/stats")
 def admin_get_stats(
     current_user: User = Depends(get_current_user),
@@ -5028,6 +5189,44 @@ def admin_get_overview(
             }
         )
 
+    users_with_no_dashboards = [
+        user for user in dashboard_users
+        if db.query(Dashboard).filter(Dashboard.user_id == user.id).count() == 0
+    ]
+
+    verified_users_with_no_dashboards = [
+        user for user in users_with_no_dashboards
+        if bool(user.email_verified)
+    ]
+
+    recent_stuck_user_rows = [
+        {
+            "email": user.email,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "email_verified": bool(user.email_verified),
+        }
+        for user in sorted(
+            users_with_no_dashboards,
+            key=lambda user: user.created_at or datetime.min,
+            reverse=True,
+        )[:10]
+    ]
+
+    recent_issue_rows = [
+        {
+            "created_at": issue.created_at.isoformat() if issue.created_at else None,
+            "source": issue.source,
+            "user_email": issue.user_email,
+            "message": issue.message,
+        }
+        for issue in (
+            db.query(InternalErrorEvent)
+            .order_by(InternalErrorEvent.created_at.desc())
+            .limit(10)
+            .all()
+        )
+    ]
+
     return {
         "generated_at": now.isoformat(),
         "filters": {
@@ -5076,6 +5275,12 @@ def admin_get_overview(
             "verified_to_paid_rate_total": paid_conversion_rate_7d,
         },
         "recent_users": recent_user_rows,
+        "ops": {
+            "users_with_no_dashboards": len(users_with_no_dashboards),
+            "verified_users_with_no_dashboards": len(verified_users_with_no_dashboards),
+            "recent_stuck_users": recent_stuck_user_rows,
+            "recent_issues": recent_issue_rows,
+        },
     }
 
 def apply_dimension_filters(
