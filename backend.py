@@ -4415,17 +4415,33 @@ def admin_get_user_by_email(
 ):
     require_admin(current_user)
 
-    user = db.query(User).filter(User.email == email).first()
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    stripe_customer_id = (user.stripe_customer_id or "").strip()
+    stripe_status_map = get_live_stripe_status_map([stripe_customer_id]) if stripe_customer_id else {}
+    stripe_status = stripe_status_map.get(stripe_customer_id, "none") if stripe_customer_id else "none"
+    effective_status = get_effective_subscription_status(user.subscription_status, stripe_status)
+
+    dashboard_count = db.query(Dashboard).filter(Dashboard.user_id == user.id).count()
+    saved_view_count = db.query(SavedView).filter(SavedView.user_id == user.id).count()
+
     return {
         "id": user.id,
         "email": user.email,
-        "subscription_status": user.subscription_status,
-        "stripe_customer_id": user.stripe_customer_id,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        "email_verified": bool(user.email_verified),
+        "subscription_status": user.subscription_status or "trial",
+        "stripe_status": stripe_status,
+        "effective_status": effective_status,
+        "stripe_customer_id": user.stripe_customer_id,
+        "is_test_user": bool(user.is_test_user),
+        "auto_detected_test_user": looks_like_test_user(user),
+        "dashboard_count": dashboard_count,
+        "saved_view_count": saved_view_count,
     }
 
 
@@ -4471,7 +4487,8 @@ def admin_get_user_dashboards(
 ):
     require_admin(current_user)
 
-    user = db.query(User).filter(User.email == email).first()
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -4496,6 +4513,122 @@ def admin_get_user_dashboards(
             }
             for d in dashboards
         ],
+    }
+
+
+@app.get("/admin/user-saved-views")
+def admin_get_user_saved_views(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    saved_views = (
+        db.query(SavedView)
+        .filter(SavedView.user_id == user.id)
+        .order_by(SavedView.created_at.desc())
+        .all()
+    )
+
+    return {
+        "user": {
+            "id": user.id,
+            "email": user.email,
+        },
+        "saved_views": [
+            {
+                "id": view.id,
+                "dashboard_id": view.dashboard_id,
+                "name": view.name,
+                "report_enabled": bool(view.report_enabled),
+                "report_frequency": view.report_frequency or "weekly",
+                "report_recipient": view.report_recipient,
+                "created_at": view.created_at.isoformat() if view.created_at else None,
+            }
+            for view in saved_views
+        ],
+    }
+
+
+@app.post("/admin/resend-verification-email")
+def admin_resend_verification_email(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.email_verified:
+        return {
+            "status": "success",
+            "message": "That user is already verified.",
+            "email": user.email,
+        }
+
+    raw_verification_token = generate_secure_token()
+    user.email_verification_token = hash_token(raw_verification_token)
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(hours=24)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    try:
+        send_verification_email(user, raw_verification_token)
+    except Exception:
+        logger.exception("Failed resending verification email from admin toolkit to user_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Failed to send verification email.")
+
+    return {
+        "status": "success",
+        "message": "Verification email sent successfully.",
+        "email": user.email,
+    }
+
+
+@app.post("/admin/send-password-reset")
+def admin_send_password_reset(
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_admin(current_user)
+
+    normalized_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    raw_reset_token = generate_secure_token()
+    user.password_reset_token = hash_token(raw_reset_token)
+    user.password_reset_expires_at = datetime.utcnow() + timedelta(hours=1)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    try:
+        send_password_reset_email(user, raw_reset_token)
+    except Exception:
+        logger.exception("Failed sending password reset email from admin toolkit to user_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Failed to send password reset email.")
+
+    return {
+        "status": "success",
+        "message": "Password reset email sent successfully.",
+        "email": user.email,
     }
 
 @app.post("/admin/set-test-user")
