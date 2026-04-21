@@ -268,6 +268,15 @@ class InternalErrorEvent(Base):
     message = Column(Text, nullable=False)
     details = Column(Text, nullable=True)
 
+
+class MRRSnapshot(Base):
+    __tablename__ = "mrr_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    mrr_gbp = Column(Integer, nullable=False)
+    active_paid_users = Column(Integer, nullable=False)
+
 Base.metadata.create_all(bind=engine)
 
 from sqlalchemy import text
